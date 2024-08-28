@@ -95,7 +95,7 @@ async def create_metadata_document():
     # 2. Convert UUID to a 64-bit integer
     st_ino = uuid_value.int & 0xFFFFFFFFFFFFFFFF
 
-    # Generate initial metadata to populate the metadata document
+    # Initial metadata to populate the metadata document
     metadata = {
         "st_mode": 0o040755,  # Directory with rwxr-xr-x permissions
         "st_ino": st_ino,   # Generated inode number (UUID-based)
@@ -107,7 +107,9 @@ async def create_metadata_document():
         "st_ctime": int(time.time()), # Time of last status change
     }
 
-    print(metadata)
+    # Set the metadata as individual keys in the document
+    for key, value in metadata.items():
+        await doc.set_bytes(author, bytes(key, "utf-8"), bytes(str(value), "utf-8"))
 
     print("Created metadata document: {}".format(metadata_doc_id))
     # Debug mode: print out the doc we just created
@@ -197,7 +199,17 @@ async def get_metadata(doc_id):
     # Fetch the metadata document
     metadata_doc = await node.docs().open(doc_id)
 
-    metadata = {}
+    # Metadata to fetch
+    metadata = {
+        "st_mode": "UNLOADED",
+        "st_ino": "UNLOADED",   # Generated inode number (UUID-based)
+        "st_uid": "UNLOADED",   # Root user ID
+        "st_gid": "UNLOADED",   # Root group ID
+        "st_size": "UNLOADED",  # Initial size (empty directory)
+        "st_atime": "UNLOADED", # Time of last access
+        "st_mtime": "UNLOADED", # Time of last modification
+        "st_ctime": "UNLOADED"
+    }
 
     # Populate the metadata dictionary with actual values
     for key, _ in metadata.items():

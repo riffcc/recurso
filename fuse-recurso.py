@@ -80,7 +80,10 @@ class RecursoFs(pyfuse3.Operations):
             raise pyfuse3.FUSEError(errno.ENOENT)
         else:
             root_document = await recurso.get_document(root_doc_id)
-
+            directory_doc_id = await recurso.get_by_key(root_doc_id, "directory")
+            metadata_doc_id = await recurso.get_by_key(directory_doc_id, "metadata")
+            metadata = await recurso.get_metadata(metadata_doc_id)
+            print(metadata)
             print(root_doc_id)
     
         return inode
