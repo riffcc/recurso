@@ -73,6 +73,10 @@ async def create_children_document():
     # Create the children document and fetch its ID
     doc = await node.docs().create()
     children_doc_id = doc.id()
+    # DEBUG: Force upload a file
+    add_outcome = await node.blobs().add_bytes(b"hello from recurso, reading real files")
+    assert add_outcome.format == iroh.BlobFormat.RAW
+    assert add_outcome.size == 38
     # Create the children document itself
     await doc.set_bytes(author, b"type", b"children")
     await doc.set_bytes(author, b"version", b"v0")
@@ -83,6 +87,7 @@ async def create_children_document():
     await doc.set_bytes(author, b"fsdir-give", b"rheibcmkl4jn63iolncyffoxyhoe327unn5wndwvmvkb5dmnxsjq")
     await doc.set_bytes(author, b"fsdir-you", b"rheibcmkl4jn63iolncyffoxyhoe327unn5wndwvmvkb5dmnxsjq")
     await doc.set_bytes(author, b"fsdir-up", b"rheibcmkl4jn63iolncyffoxyhoe327unn5wndwvmvkb5dmnxsjq")
+    await doc.set_bytes(author, b"fsfile-hello-world", bytes(str(add_outcome.hash), "utf-8"))
     print("Created children document: {}".format(children_doc_id))
     # Debug mode: print out the doc we just created
     if debug_mode:
