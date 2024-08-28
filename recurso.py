@@ -2,12 +2,25 @@ import iroh
 import argparse
 import asyncio
 import time
+import uuid
 
 # Utility functions
 async def get_all_keys(doc):
     query = iroh.Query.all(None)
     entries = await doc.get_many(query)
     return entries
+
+async def get_by_key(doc_id, keyname):
+    # Fetch the directory document from a key within a doc
+    # Get the document we were passed
+    doc = await node.docs().open(doc_id)
+    # Lookup key
+    key_entry = await doc.get_exact(author, bytes(keyname, "utf-8"), False)
+    key_doc_id = await key_entry.content_bytes(doc)
+    # Decode the key_doc_id from bytes to string
+    key_doc_id = key_doc_id.decode("utf-8")
+    # Return the directory document ID
+    return key_doc_id
 
 async def print_all_keys(doc):
     entries = await get_all_keys(doc)
@@ -65,17 +78,58 @@ async def create_children_document():
         await print_all_keys(doc)
     return children_doc_id
 
+async def create_metadata_document():
+    print("Creating metadata document")
+    # Create the metadata document and fetch its ID
+    doc = await node.docs().create()
+    metadata_doc_id = doc.id()
+    # Create the metadata document itself
+    await doc.set_bytes(author, b"type", b"metadata")
+    await doc.set_bytes(author, b"version", b"v0")
+    await doc.set_bytes(author, b"created", bytes(str(time.time()), "utf-8"))
+    await doc.set_bytes(author, b"updated", bytes(str(time.time()), "utf-8"))
+
+    # Generate an initial inode
+    # 1. Generate a UUID
+    uuid_value = uuid.uuid4()    
+    # 2. Convert UUID to a 64-bit integer
+    st_ino = uuid_value.int & 0xFFFFFFFFFFFFFFFF
+
+    # Generate initial metadata to populate the metadata document
+    metadata = {
+        "st_mode": 0o040755,  # Directory with rwxr-xr-x permissions
+        "st_ino": st_ino,   # Generated inode number (UUID-based)
+        "st_uid": 0,   # Root user ID
+        "st_gid": 0,   # Root group ID
+        "st_size": 0,  # Initial size (empty directory)
+        "st_atime": int(time.time()), # Time of last access
+        "st_mtime": int(time.time()), # Time of last modification
+        "st_ctime": int(time.time()), # Time of last status change
+    }
+
+    print(metadata)
+
+    print("Created metadata document: {}".format(metadata_doc_id))
+    # Debug mode: print out the doc we just created
+    if debug_mode:
+        # Fetch all keys from the document
+        await print_all_keys(doc)
+    return metadata_doc_id
+
 async def create_directory_document():
     print("Creating directory document")
     doc = await node.docs().create()
     directory_doc_id = doc.id()
     # Create the children document and fetch its ID
     children_doc_id = await create_children_document()
+    # Create the metadata document and fetch its ID
+    metadata_doc_id = await create_metadata_document()
     # Create the directory document
     await doc.set_bytes(author, b"type", b"directory")
     await doc.set_bytes(author, b"version", b"v0")
     await doc.set_bytes(author, b"created", bytes(str(time.time()), "utf-8"))
     await doc.set_bytes(author, b"updated", bytes(str(time.time()), "utf-8"))
+    await doc.set_bytes(author, b"metadata", bytes(metadata_doc_id, "utf-8"))
     await doc.set_bytes(author, b"children", bytes(children_doc_id, "utf-8"))
     print("Created directory document: {}".format(directory_doc_id))
     # Debug mode: print out the doc we just created
@@ -124,9 +178,35 @@ async def create_new_root_document(doc_id):
     await doc.set_bytes(author, b"directory", bytes(directory_doc_id, "utf-8"))
     return doc_id
 
+async def get_directory_info(doc_id):
+    # Get inode and other directory info from a DirectoryDoc
+    doc = await node.docs().open(doc_id)
+    # Lookup metadata key
+    metadata_entry = await doc.get_exact(author, b"metadata", False)
+    metadata_doc_id = await metadata_entry.content_bytes(doc)
+    # Fetch metadata
+    directory_metadata = await get_metadata(metadata_doc_id.decode("utf-8"))
+    # Print metadata
+    print(directory_metadata)
+
 async def get_document(doc_id):
     doc = await node.docs().open(doc_id)
     return doc
+
+async def get_metadata(doc_id):
+    # Fetch the metadata document
+    metadata_doc = await node.docs().open(doc_id)
+
+    metadata = {}
+
+    # Populate the metadata dictionary with actual values
+    for key, _ in metadata.items():
+        entry = await metadata_doc.get_exact(author, key.encode(), False)
+        if entry:
+            value = await entry.content_bytes(metadata_doc)
+            metadata[key] = int(value.decode())
+
+    return metadata
 
 async def setup_iroh_node(ticket=False, debug=False):
     global node

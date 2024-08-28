@@ -37,3 +37,16 @@ async def test_create_root_document():
     directory_content = await directory_entry.content_bytes(root_document)
     assert isinstance(directory_content.decode('utf-8'), str)
     assert len(directory_content.decode('utf-8')) > 0
+
+async def test_get_root_document_directory_metadata():
+    global author
+    await recurso.setup_iroh_node()
+    author = recurso.author
+
+    root_doc_id = await recurso.create_root_document()
+    root_document = await recurso.get_document(root_doc_id)
+
+    root_directory_doc_id = await recurso.get_by_key(root_doc_id, "directory")
+    root_directory_document = await recurso.get_document(root_doc_id)
+
+    await recurso.get_directory_info(root_directory_doc_id)
