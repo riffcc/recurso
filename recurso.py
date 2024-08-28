@@ -1,8 +1,11 @@
 import iroh
-
 import argparse
 import asyncio
 import time
+import pyfuse3
+import pyfuse3.asyncio
+
+pyfuse3.asyncio.enable()
 
 # Utility functions
 async def get_all_keys(doc):
@@ -46,7 +49,7 @@ async def scan_root_document(doc_id):
             print("Was expecting a root document. Bailing!")
             return "state", "err_not_root"
     else:
-        print("No type set and no odd markers found. Continuing...")
+        print("No type set and no odd markers found. Creating as empty rootdoc...")
         return "state", "empty"
 
 async def create_children_document():
