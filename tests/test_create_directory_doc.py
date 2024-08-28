@@ -22,7 +22,7 @@ async def test_create_directory_document():
     assert entries is not None
     assert len(entries) > 0
 
-    # Check type is == "document"
+    # Check type is == "directory"
     type_entry = await directory_document.get_exact(author, b"type", False)
     type_content = await type_entry.content_bytes(directory_document)
     assert type_content == b"directory"
