@@ -19,9 +19,9 @@ else:
 
 log = logging.getLogger(__name__)
 
-class TestFs(pyfuse3.Operations):
+class RecursoFs(pyfuse3.Operations):
     def __init__(self):
-        super(TestFs, self).__init__()
+        super(RecursoFs, self).__init__()
         self.hello_name = b"message"
         self.hello_inode = pyfuse3.ROOT_INODE+1
         self.hello_data = b"hello world\n"
@@ -109,12 +109,12 @@ def main():
     options = parse_args()
     init_logging(options.debug)
 
-    testfs = TestFs()
+    recursofs = RecursoFs()
     fuse_options = set(pyfuse3.default_options)
     fuse_options.add('fsname=recurso')
     if options.debug_fuse:
         fuse_options.add('debug')
-    pyfuse3.init(testfs, options.mountpoint, fuse_options)
+    pyfuse3.init(recursofs, options.mountpoint, fuse_options)
     try:
         trio.run(pyfuse3.main)
     except:
