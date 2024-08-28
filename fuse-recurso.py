@@ -138,10 +138,6 @@ class RecursoFs(pyfuse3.Operations):
             # Reply with the entry to FUSE
             pyfuse3.readdir_reply(
                 token, bytes(real_name, "utf8"), await self.getattr(self.hello_inode), i + 1)
-
-            if i + 1 - start_id >= 10:  # Limit to 10 entries per readdir call (you can adjust this as needed)
-                break
-
         return
 
     async def open(self, inode, flags, ctx):
