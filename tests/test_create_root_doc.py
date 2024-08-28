@@ -31,3 +31,9 @@ async def test_create_root_document():
     version_entry = await root_document.get_exact(author, b"version", False)
     version_content = await version_entry.content_bytes(root_document)
     assert version_content == b"v0"
+
+    # Check directory ID is == some string
+    directory_entry = await root_document.get_exact(author, b"directory", False)
+    directory_content = await directory_entry.content_bytes(root_document)
+    assert isinstance(directory_content.decode('utf-8'), str)
+    assert len(directory_content.decode('utf-8')) > 0

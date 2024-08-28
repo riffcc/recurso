@@ -30,15 +30,17 @@ class RecursoFs(pyfuse3.Operations):
         self.recurso = None
 
     async def load_recurso(self):
-        global author
+        global recurso
         # TODO: Allow for a ticket to be passed in
 
         # Start the Recurso node
-        self.recurso = await recurso.setup_iroh_node()
+        self.recurso = await recurso.setup_iroh_node(debug=debug_mode)
         
         # Create a root document
         root_doc_id = await recurso.create_root_document()
         root_document = await recurso.get_document(root_doc_id)
+
+        return root_doc_id
 
     async def getattr(self, inode, ctx=None):
         # Get attributes of given inode (file or directory)
@@ -68,9 +70,19 @@ class RecursoFs(pyfuse3.Operations):
         return await self.getattr(self.hello_inode)
 
     async def opendir(self, inode, ctx):
+        # We're opening a directory, so we should figure out
+        # * That it exists
+        # * That we can access it
+        # * Return a handle that will be used in readdir
+        # * That it has a valid 64-bit inode
+        # For now we'll only have compatibility with the root directory
         if inode != pyfuse3.ROOT_INODE:
             raise pyfuse3.FUSEError(errno.ENOENT)
-        print(inode)
+        else:
+            root_document = await recurso.get_document(root_doc_id)
+
+            print(root_doc_id)
+    
         return inode
 
     async def readdir(self, fh, start_id, token):
@@ -78,6 +90,9 @@ class RecursoFs(pyfuse3.Operations):
 
         # only one entry
         if start_id == 0:
+            # We're in the root directory
+            # Fetch the contents of the root directory
+            print("We'd fetch root here")
             pyfuse3.readdir_reply(
                 token, self.hello_name, await self.getattr(self.hello_inode), 1)
         return
@@ -121,12 +136,20 @@ def parse_args():
     return parser.parse_args()
 
 async def main():
+    global root_doc_id
+    global author
+    global debug_mode
+
+    debug_mode = False
     options = parse_args()
+
+    if options.debug:
+        debug_mode = True
 
     init_logging(options.debug)
 
     recursofs = RecursoFs()
-    await recursofs.load_recurso()
+    root_doc_id = await recursofs.load_recurso()
 
     fuse_options = set(pyfuse3.default_options)
     fuse_options.add('fsname=recurso')

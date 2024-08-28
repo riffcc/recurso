@@ -171,7 +171,7 @@ async def main():
         ticket = args.ticket
 
     # Setup iroh node
-    await setup_iroh_node(ticket, )
+    await setup_iroh_node(ticket, debug_mode)
 
     # create or find root document
     await create_root_document()
