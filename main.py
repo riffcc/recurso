@@ -4,6 +4,18 @@ import argparse
 import asyncio
 import time
 
+# Utility functions
+async def print_all_keys(doc):
+    query = iroh.Query.all(None)
+    entries = await doc.get_many(query)
+    print("Keys:")
+    for entry in entries:
+        key = entry.key()
+        hash = entry.content_hash()
+        content = await entry.content_bytes(doc)
+        print("{} : {} (hash: {})".format(key, content.decode("utf8"), hash))
+
+# Main functions
 async def scan_root_document(doc_id):
     print("Scanning root document")
     doc = await node.docs().open(doc_id)
@@ -35,28 +47,41 @@ async def scan_root_document(doc_id):
     return doc
 
 async def create_children_document():
+    print("Creating children document")
+    # Create the children document and fetch its ID
     doc = await node.docs().create()
     children_doc_id = doc.id()
+    # Create the children document itself
+    await doc.set_bytes(author, b"type", b"children")
+    await doc.set_bytes(author, b"version", b"v0")
+    await doc.set_bytes(author, b"created", bytes(str(time.time()), "utf-8"))
+    await doc.set_bytes(author, b"updated", bytes(str(time.time()), "utf-8"))
     print("Created children document: {}".format(children_doc_id))
+    # Debug mode: print out the doc we just created
+    if debug_mode:
+        # Fetch all keys from the document
+        await print_all_keys(doc)
     return children_doc_id
 
-async def create_directory_document(doc_id):
-    print("Creating directory document in: {}".format(doc_id))
-    doc = await node.docs().open(doc_id)
+async def create_directory_document():
+    print("Creating directory document")
+    doc = await node.docs().create()
+    directory_doc_id = doc.id()
     # Create the children document and fetch its ID
     children_doc_id = await create_children_document()
     # Create the directory document
     await doc.set_bytes(author, b"type", b"directory")
     await doc.set_bytes(author, b"version", b"v0")
-    await doc.set_bytes(author, b"created", time.time())
-    await doc.set_bytes(author, b"updated", time.time())
-    await doc.set_bytes(author, b"children", children_doc_id)
+    await doc.set_bytes(author, b"created", bytes(str(time.time()), "utf-8"))
+    await doc.set_bytes(author, b"updated", bytes(str(time.time()), "utf-8"))
+    await doc.set_bytes(author, b"children", bytes(children_doc_id, "utf-8"))
+    print("Created directory document: {}".format(directory_doc_id))
     # Debug mode: print out the doc we just created
     if debug_mode:
         # Fetch all keys from the document
-        query = iroh.Query.all(None)
-        entries = await doc.get_many(query)
-    return doc_id
+        await print_all_keys(doc)
+
+    return directory_doc_id
 
 async def create_root_document(ticket=False):
     # Find or create a root document for Recurso to use.
@@ -75,10 +100,15 @@ async def create_root_document(ticket=False):
 async def create_new_root_document(doc_id):
     print("Creating new root document in: {}".format(doc_id))
     doc = await node.docs().open(doc_id)
-    await doc.set_bytes(author, b"type", b"root document")
+    # Create the directory document and fetch its ID
+    directory_doc_id = await create_directory_document()
+
+    # Create the root document
+    await doc.set_bytes(author, b"type", b"root")
     await doc.set_bytes(author, b"version", b"v0")
     await doc.set_bytes(author, b"created", bytes(str(time.time()), "utf-8"))
     await doc.set_bytes(author, b"updated", bytes(str(time.time()), "utf-8"))
+    await doc.set_bytes(author, b"directory", bytes(directory_doc_id, "utf-8"))
     return doc_id
 
 async def main():
@@ -110,7 +140,7 @@ async def main():
 
     # Get and set default author globally
     author = await node.authors().default()
-    print(f"Default author {author}")
+    print(f"Default author: {author}")
 
     # create or find root document
     await create_root_document()
