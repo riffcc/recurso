@@ -5,10 +5,13 @@ import asyncio
 import time
 
 # Utility functions
-async def print_all_keys(doc):
+async def get_all_keys(doc):
     query = iroh.Query.all(None)
     entries = await doc.get_many(query)
-    print("Keys:")
+    return entries
+
+async def print_all_keys(doc):
+    entries = await get_all_keys(doc)
     for entry in entries:
         key = entry.key()
         hash = entry.content_hash()
@@ -28,23 +31,23 @@ async def scan_root_document(doc_id):
     if "type" in entries:
         print("Type: {}".format(entries["type"]))
         # Check if the type is set to "root document"
-        if entries["type"] == "root document":
+        if entries["type"] == "root":
             print("Root document found")
             # Check version is v0
             if entries["version"] == "v0":
                 print("Root document is v0")
+                return "state", "ok"
             else:
                 print("Root document is not v0, bailing!")
-                return
+                return "state", "err_not_v0"
         # Check if the type is set to anything other than "root document", but exists:
         elif entries["type"] and entries["type"] != "root document":
             print("Found a document of type: {}".format(entries["type"]))
             print("Was expecting a root document. Bailing!")
-            return
+            return "state", "err_not_root"
     else:
         print("No type set and no odd markers found. Continuing...")
-        await create_new_root_document(doc_id)
-    return doc
+        return "state", "empty"
 
 async def create_children_document():
     print("Creating children document")
@@ -94,8 +97,19 @@ async def create_root_document(ticket=False):
         doc = await node.docs().create()
         doc_id = doc.id()
         print("Created initial root doc: {}".format(doc_id))
-    await scan_root_document(doc_id)
-    return doc.id()
+    state, status = await scan_root_document(doc_id)
+    if status == "ok":
+        # Found a root document, return it
+        return doc_id
+    elif status == "empty":
+        # No root document found, create a new one
+        return await create_new_root_document(doc_id)
+        return doc_id
+    elif status == "err_not_root":
+        # Found a document of type other than "root document"
+        print("Found a document of type other than 'root document'. Bailing!")
+        return "state", "err_not_root"
+    return doc_id
 
 async def create_new_root_document(doc_id):
     print("Creating new root document in: {}".format(doc_id))
@@ -111,7 +125,11 @@ async def create_new_root_document(doc_id):
     await doc.set_bytes(author, b"directory", bytes(directory_doc_id, "utf-8"))
     return doc_id
 
-async def main():
+async def get_document(doc_id):
+    doc = await node.docs().open(doc_id)
+    return doc
+
+async def setup_iroh_node():
     global node
     global author
     global debug_mode
@@ -142,6 +160,14 @@ async def main():
     author = await node.authors().default()
     print(f"Default author: {author}")
 
+async def main():
+    global node
+    global author
+    global debug_mode
+
+    # Setup iroh node
+    await setup_iroh_node()
+
     # create or find root document
     await create_root_document()
 
@@ -151,6 +177,7 @@ async def main():
     for doc in docs:
         print("\t{}".format(doc))
 
+    return 0
     exit()
 
 
