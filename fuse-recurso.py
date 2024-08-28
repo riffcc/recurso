@@ -83,13 +83,45 @@ class RecursoFs(pyfuse3.Operations):
             directory_doc_id = await recurso.get_by_key(root_doc_id, "directory")
             metadata_doc_id = await recurso.get_by_key(directory_doc_id, "metadata")
             metadata = await recurso.get_metadata(metadata_doc_id)
-            print(metadata)
-            print(root_doc_id)
-    
+            inode = metadata["st_ino"]
         return inode
 
     async def readdir(self, fh, start_id, token):
-        assert fh == pyfuse3.ROOT_INODE
+        # Make sure we have a pointer to the inode map document
+        if not recurso.inode_map_doc_id:
+            print("Panic! No inode map ID found!")
+            sys.exit(1)
+
+        # TEMPORARY BEGIN: Restrict to root inode
+        # Lookup the real root inode number from the inode map
+        root_inode_number = await recurso.get_by_key(recurso.inode_map_doc_id, "1")
+    
+        # Fail if we're not in the root inode
+        assert fh in (pyfuse3.ROOT_INODE, int(root_inode_number)), "File handle is not the root inode."
+        # TEMPORARY END
+
+        # Lookup the directory by inode from the central inode map
+        directory_doc_id = await recurso.get_by_key(recurso.inode_map_doc_id, str(fh))
+
+        # Lookup the metadata for the directory
+        metadata = await recurso.get_directory_info(directory_doc_id)
+
+        # Lookup the children for the directory which will contain the list of child files and directories
+        children_doc_id = await recurso.get_by_key(directory_doc_id, "children")
+        # List directory children
+        children["dirs"] = []
+        children["files"] = []
+        #children["links"] = []
+        #children["other"] = []
+
+        # Get dirs
+        children["dirs"] = await recurso.get_all_keys_by_prefix(children_doc_id, "fsdir")
+
+        # Files
+        children["files"] = await recurso.get_all_keys_by_prefix(children_doc_id, "fsfile")
+
+        # Start ID tells us how many entries we've already fetched, 0 is the first fetch for this directory
+        # We'll need to support paging with this via https://github.com/riffcc/recurso/issues/12
 
         # only one entry
         if start_id == 0:
@@ -98,6 +130,7 @@ class RecursoFs(pyfuse3.Operations):
             print("We'd fetch root here")
             pyfuse3.readdir_reply(
                 token, self.hello_name, await self.getattr(self.hello_inode), 1)
+        
         return
 
     async def open(self, inode, flags, ctx):
