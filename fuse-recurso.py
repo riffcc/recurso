@@ -21,12 +21,14 @@ log = logging.getLogger(__name__)
 
 class RecursoFs(pyfuse3.Operations):
     def __init__(self):
+        # Inititialise the Recurso file system
         super(RecursoFs, self).__init__()
         self.hello_name = b"message"
         self.hello_inode = pyfuse3.ROOT_INODE+1
-        self.hello_data = b"hello world\n"
+        self.hello_data = b"hello recurso\n"
 
     async def getattr(self, inode, ctx=None):
+        # Get attributes of given inode (file or directory)
         entry = pyfuse3.EntryAttributes()
         if inode == pyfuse3.ROOT_INODE:
             entry.st_mode = (stat.S_IFDIR | 0o755)
@@ -55,6 +57,7 @@ class RecursoFs(pyfuse3.Operations):
     async def opendir(self, inode, ctx):
         if inode != pyfuse3.ROOT_INODE:
             raise pyfuse3.FUSEError(errno.ENOENT)
+        print(inode)
         return inode
 
     async def readdir(self, fh, start_id, token):
