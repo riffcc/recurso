@@ -2,10 +2,6 @@ import iroh
 import argparse
 import asyncio
 import time
-import pyfuse3
-import pyfuse3.asyncio
-
-pyfuse3.asyncio.enable()
 
 # Utility functions
 async def get_all_keys(doc):
