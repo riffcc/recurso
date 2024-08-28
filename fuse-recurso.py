@@ -108,29 +108,40 @@ class RecursoFs(pyfuse3.Operations):
 
         # Lookup the children for the directory which will contain the list of child files and directories
         children_doc_id = await recurso.get_by_key(directory_doc_id, "children")
+        # Grab the children document
+        children_document = await recurso.get_document(children_doc_id)
+
         # List directory children
-        children["dirs"] = []
-        children["files"] = []
-        #children["links"] = []
-        #children["other"] = []
+        children = {}
+        children["dirs"] = await recurso.get_all_keys_by_prefix(children_document, "fsdir")
+        children["files"] = await recurso.get_all_keys_by_prefix(children_document, "fsfile")
 
-        # Get dirs
-        children["dirs"] = await recurso.get_all_keys_by_prefix(children_doc_id, "fsdir")
-
-        # Files
-        children["files"] = await recurso.get_all_keys_by_prefix(children_doc_id, "fsfile")
-
-        # Start ID tells us how many entries we've already fetched, 0 is the first fetch for this directory
-        # We'll need to support paging with this via https://github.com/riffcc/recurso/issues/12
-
-        # only one entry
-        if start_id == 0:
-            # We're in the root directory
-            # Fetch the contents of the root directory
-            print("We'd fetch root here")
-            pyfuse3.readdir_reply(
-                token, self.hello_name, await self.getattr(self.hello_inode), 1)
+        # If no children are found, return an empty list
+        if not children:
+            return []
         
+        # Create a list of children from merging the two lists
+        children_list = children["dirs"] + children["files"]
+        # Sort children to ensure consistent order
+        children_list.sort(key=lambda x: x.key())
+
+        # Iterate over children, respecting the start_id
+        for i, entry in enumerate(children_list):
+            if i < start_id:
+                continue
+        
+            real_name = entry.key().decode("utf8")
+            real_name = real_name[real_name.find("-") + 1:]
+            hash = entry.content_hash()
+            content = await entry.content_bytes(children_document)
+            
+            # Reply with the entry to FUSE
+            pyfuse3.readdir_reply(
+                token, bytes(real_name, "utf8"), await self.getattr(self.hello_inode), i + 1)
+
+            if i + 1 - start_id >= 10:  # Limit to 10 entries per readdir call (you can adjust this as needed)
+                break
+
         return
 
     async def open(self, inode, flags, ctx):

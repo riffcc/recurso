@@ -5,16 +5,26 @@ import time
 import uuid
 
 # Utility functions
+# These take docs, not doc IDs
 async def get_all_keys(doc):
     query = iroh.Query.all(None)
     entries = await doc.get_many(query)
     return entries
 
 async def get_all_keys_by_prefix(doc, prefix):
-    query = iroh.Query.all(prefix)
+    query = iroh.Query.key_prefix(bytes(prefix, "utf-8"), None)
     entries = await doc.get_many(query)
     return entries
 
+async def print_all_keys(doc):
+    entries = await get_all_keys(doc)
+    for entry in entries:
+        key = entry.key()
+        hash = entry.content_hash()
+        content = await entry.content_bytes(doc)
+        print("{} : {} (hash: {})".format(key, content.decode("utf8"), hash))
+
+# These take doc IDs
 async def get_by_key(doc_id, keyname):
     # Fetch the directory document from a key within a doc
     # Get the document we were passed
@@ -26,14 +36,6 @@ async def get_by_key(doc_id, keyname):
     key_doc_id = key_doc_id.decode("utf-8")
     # Return the directory document ID
     return key_doc_id
-
-async def print_all_keys(doc):
-    entries = await get_all_keys(doc)
-    for entry in entries:
-        key = entry.key()
-        hash = entry.content_hash()
-        content = await entry.content_bytes(doc)
-        print("{} : {} (hash: {})".format(key, content.decode("utf8"), hash))
 
 # Main functions
 async def scan_root_document(doc_id):
@@ -76,6 +78,11 @@ async def create_children_document():
     await doc.set_bytes(author, b"version", b"v0")
     await doc.set_bytes(author, b"created", bytes(str(time.time()), "utf-8"))
     await doc.set_bytes(author, b"updated", bytes(str(time.time()), "utf-8"))
+    await doc.set_bytes(author, b"fsdir-never", b"rheibcmkl4jn63iolncyffoxyhoe327unn5wndwvmvkb5dmnxsjq")
+    await doc.set_bytes(author, b"fsdir-gonna", b"rheibcmkl4jn63iolncyffoxyhoe327unn5wndwvmvkb5dmnxsjq")
+    await doc.set_bytes(author, b"fsdir-give", b"rheibcmkl4jn63iolncyffoxyhoe327unn5wndwvmvkb5dmnxsjq")
+    await doc.set_bytes(author, b"fsdir-you", b"rheibcmkl4jn63iolncyffoxyhoe327unn5wndwvmvkb5dmnxsjq")
+    await doc.set_bytes(author, b"fsdir-up", b"rheibcmkl4jn63iolncyffoxyhoe327unn5wndwvmvkb5dmnxsjq")
     print("Created children document: {}".format(children_doc_id))
     # Debug mode: print out the doc we just created
     if debug_mode:
@@ -205,6 +212,7 @@ async def create_new_root_document(doc_id):
     global inode_map_doc_id
     print("Creating new root document in: {}".format(doc_id))
     doc = await node.docs().open(doc_id)
+
     # Create the directory document and fetch its ID
     directory_doc_id = await create_directory_document()
 
