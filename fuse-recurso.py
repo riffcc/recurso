@@ -2,14 +2,12 @@ import pyfuse3
 import pyfuse3_asyncio
 import os
 import sys
+import asyncio
 
 from argparse import ArgumentParser
 import stat
 import logging
 import errno
-import pyfuse3
-import trio
-
 # Import the Recurso node
 import recurso
 
@@ -25,15 +23,15 @@ log = logging.getLogger(__name__)
 class RecursoFs(pyfuse3.Operations):
     def __init__(self):
         global author
-
         # Inititialise the Recurso file system
         super(RecursoFs, self).__init__()
-
-        trio.run(self.load_recurso)
-
         self.hello_name = b"message"
         self.hello_inode = pyfuse3.ROOT_INODE+1
         self.hello_data = b"hello recurso\n"
+        self.recurso = None
+
+    async def initialize(self):
+        await self.load_recurso()
 
     async def load_recurso(self):
         # TODO: Allow for a ticket to be passed in
@@ -126,12 +124,13 @@ def parse_args():
                         help='Enable FUSE debugging output')
     return parser.parse_args()
 
-
-def main():
+async def main():
     options = parse_args()
+
     init_logging(options.debug)
 
     recursofs = RecursoFs()
+    await recursofs.initialize()
 
     fuse_options = set(pyfuse3.default_options)
     fuse_options.add('fsname=recurso')
@@ -139,13 +138,14 @@ def main():
         fuse_options.add('debug')
     pyfuse3.init(recursofs, options.mountpoint, fuse_options)
     try:
-        trio.run(pyfuse3.main)
+        await pyfuse3.main()
     except:
-        pyfuse3.close(unmount=False)
+        pyfuse3.close(unmount=True)
         raise
 
     pyfuse3.close()
 
 
 if __name__ == '__main__':
-    main()
+    pyfuse3_asyncio.enable()
+    asyncio.run(main())
