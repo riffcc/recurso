@@ -22,7 +22,6 @@ log = logging.getLogger(__name__)
 
 class RecursoFs(pyfuse3.Operations):
     def __init__(self):
-        global author
         # Inititialise the Recurso file system
         super(RecursoFs, self).__init__()
         self.hello_name = b"message"
@@ -30,15 +29,12 @@ class RecursoFs(pyfuse3.Operations):
         self.hello_data = b"hello recurso\n"
         self.recurso = None
 
-    async def initialize(self):
-        await self.load_recurso()
-
     async def load_recurso(self):
+        global author
         # TODO: Allow for a ticket to be passed in
 
         # Start the Recurso node
         self.recurso = await recurso.setup_iroh_node()
-        author = self.recurso.author
         
         # Create a root document
         root_doc_id = await recurso.create_root_document()
@@ -130,7 +126,7 @@ async def main():
     init_logging(options.debug)
 
     recursofs = RecursoFs()
-    await recursofs.initialize()
+    await recursofs.load_recurso()
 
     fuse_options = set(pyfuse3.default_options)
     fuse_options.add('fsname=recurso')

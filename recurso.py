@@ -128,27 +128,17 @@ async def get_document(doc_id):
     doc = await node.docs().open(doc_id)
     return doc
 
-async def setup_iroh_node():
+async def setup_iroh_node(ticket=False, debug=False):
     global node
     global author
     global debug_mode
     # setup event loop, to ensure async callbacks work
     iroh.iroh_ffi.uniffi_set_event_loop(asyncio.get_running_loop())
 
-    # set initial var states
-    debug_mode = False
-
-    # parse arguments
-    parser = argparse.ArgumentParser(description='Recurso Demo')
-    parser.add_argument('--ticket', type=str, help='ticket to join a root document')
-    parser.add_argument('--debug', action='store_true', help='enable debug mode')
-
-    args = parser.parse_args()
-
-    if args.debug:
-        debug_mode = True
-
     print("Starting Recurso Demo")
+
+    # set debug mode based on debug flag
+    debug_mode = debug
 
     # create iroh node
     node = await iroh.Iroh.memory()
@@ -164,8 +154,24 @@ async def main():
     global author
     global debug_mode
 
+    # set initial var states
+    debug_mode = False
+    ticket = False
+
+    # parse arguments
+    parser = argparse.ArgumentParser(description='Recurso Demo')
+    parser.add_argument('--ticket', type=str, help='ticket to join a root document')
+    parser.add_argument('--debug', action='store_true', help='enable debug mode')
+
+    args = parser.parse_args()
+
+    if args.debug:
+        debug_mode = True
+    if args.ticket:
+        ticket = args.ticket
+
     # Setup iroh node
-    await setup_iroh_node()
+    await setup_iroh_node(ticket, )
 
     # create or find root document
     await create_root_document()
