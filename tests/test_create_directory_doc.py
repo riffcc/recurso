@@ -9,7 +9,9 @@ async def test_create_directory_document():
     await recurso.setup_iroh_node()
     author = recurso.author
 
-    directory_doc_id = await recurso.create_directory_document()
+    root_doc_id, inode_map_doc_id = await recurso.create_root_document()
+
+    directory_doc_id = await recurso.create_directory_document("Testfolder", inode_map_doc_id)
     directory_document = await recurso.get_document(directory_doc_id)
 
     # Basic smoke tests
@@ -49,7 +51,9 @@ async def test_create_directory_document_metadata():
     await recurso.setup_iroh_node()
     author = recurso.author
 
-    directory_doc_id = await recurso.create_directory_document()
+    root_doc_id, inode_map_doc_id = await recurso.create_root_document()
+
+    directory_doc_id = await recurso.create_directory_document("Testfolder", inode_map_doc_id)
     directory_document = await recurso.get_document(directory_doc_id)
 
-    await recurso.get_directory_info(directory_doc_id)
+    await recurso.get_metadata_for_doc_id(directory_doc_id)
