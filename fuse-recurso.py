@@ -37,16 +37,18 @@ class RecursoFs(pyfuse3.Operations):
         self.recurso = await recurso.setup_iroh_node(debug=debug_mode)
         
         # Create a root document
-        root_doc_id = await recurso.create_root_document()
-        print("Root doc ID: {}".format(root_doc_id))
+        root_doc_id, root_directory_doc_id, inode_map_doc_id = await recurso.create_root_document()
+        # print("Root doc ID: {}".format(root_doc_id))
+        # print("Root directory doc ID: {}".format(root_directory_doc_id))
         root_document = await recurso.get_document(root_doc_id)
 
-        return root_doc_id
+        return root_doc_id, inode_map_doc_id
 
     async def getattr(self, inode, ctx=None):
         # Get attributes of given inode (file or directory)
         entry = pyfuse3.EntryAttributes()
         inode_doc_id = None
+        print("ATTEMPT TO LOOKUP INODE" + str(inode))
         # Lookup the inode in the central inode map
         inode_doc_id = await recurso.get_by_key(recurso.inode_map_doc_id, str(inode))
         print("Inode doc ID: {}".format(inode_doc_id))
@@ -154,14 +156,21 @@ class RecursoFs(pyfuse3.Operations):
             print(inode_doc_id)
             # Get the metadata for the inode
             metadata = await recurso.get_metadata_for_doc_id(inode_doc_id)
-            
-            # Print the metadata
-            print("HIT")
-            print(metadata)
+
+            # Fetch the inode number
+            real_inode = metadata["st_ino"]
+            print("REAL INODE: {}".format(real_inode))
+
+            # Dump a copy of the keys of the inode document
+            try:
+                inode_document = await recurso.get_document(recurso.inode_map_doc_id)
+                await recurso.print_all_keys(inode_document)
+            except Exception as e:
+                print("Error printing inode document: {}".format(e))
 
             # Reply with the entry to FUSE
             pyfuse3.readdir_reply(
-                token, bytes(real_name, "utf8"), await self.getattr(self.hello_inode), i + 1)
+                token, real_name, await self.getattr(real_inode), i + 1)
         return
 
     async def open(self, inode, flags, ctx):
@@ -217,7 +226,7 @@ async def main():
     init_logging(options.debug)
 
     recursofs = RecursoFs()
-    root_doc_id = await recursofs.load_recurso()
+    root_doc_id, inode_map_doc_id = await recursofs.load_recurso()
 
     fuse_options = set(pyfuse3.default_options)
     fuse_options.add('fsname=recurso')

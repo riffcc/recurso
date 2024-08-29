@@ -9,9 +9,9 @@ async def test_create_children_document():
     await recurso.setup_iroh_node()
     author = recurso.author
 
-    root_doc_id, inode_map_doc_id = await recurso.create_root_document()
+    root_doc_id, root_directory_doc_id, inode_map_doc_id = await recurso.create_root_document()
 
-    children_doc_id = await recurso.create_children_document()
+    children_doc_id = await recurso.create_children_document(root_directory_doc_id)
     children_document = await recurso.get_document(children_doc_id)
 
     # Basic smoke tests

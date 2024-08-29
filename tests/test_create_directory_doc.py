@@ -9,7 +9,7 @@ async def test_create_directory_document():
     await recurso.setup_iroh_node()
     author = recurso.author
 
-    root_doc_id, inode_map_doc_id = await recurso.create_root_document()
+    root_doc_id, root_directory_doc_id, inode_map_doc_id = await recurso.create_root_document()
 
     directory_doc_id = await recurso.create_directory_document("Testfolder", inode_map_doc_id)
     directory_document = await recurso.get_document(directory_doc_id)
@@ -51,7 +51,7 @@ async def test_create_directory_document_metadata():
     await recurso.setup_iroh_node()
     author = recurso.author
 
-    root_doc_id, inode_map_doc_id = await recurso.create_root_document()
+    root_doc_id, root_directory_doc_id, inode_map_doc_id = await recurso.create_root_document()
 
     directory_doc_id = await recurso.create_directory_document("Testfolder", inode_map_doc_id)
     directory_document = await recurso.get_document(directory_doc_id)

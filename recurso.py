@@ -68,7 +68,7 @@ async def scan_root_document(doc_id):
         print("No type set and no odd markers found. Creating as empty rootdoc...")
         return "state", "empty"
 
-async def create_children_document():
+async def create_children_document(inode_map_doc_id):
     print("Creating children document")
     # Create the children document and fetch its ID
     doc = await node.docs().create()
@@ -116,7 +116,7 @@ async def create_metadata_document(name, doc_id, inode_map_doc_id):
     # 2. Convert UUID to a 64-bit integer
     st_ino = uuid_value.int & 0xFFFFFFFFFFFFFFFF
 
-    # Initial metadata to populate the metadata document
+    # Initial metadata to populate the metadata document 
     metadata = {
         "st_mode": 0o040755,  # Directory with rwxr-xr-x permissions
         "st_ino": st_ino,   # Generated inode number (UUID-based)
@@ -134,9 +134,16 @@ async def create_metadata_document(name, doc_id, inode_map_doc_id):
 
     # Load the inode map document
     inode_map_doc = await node.docs().open(inode_map_doc_id)
+    print("Loaded inode map document: {}".format(inode_map_doc_id))
 
     # Push the origin document ID into the central inode map
+    print("Pushing inode map item name {} for inode {}".format(name, st_ino))
     await inode_map_doc.set_bytes(author, bytes(str(st_ino), "utf-8"), bytes(str(doc_id), "utf-8"))
+
+    # Grab all keys from the inode map document
+    print("Grabbing all keys from the inode map document")
+    keys = await get_all_keys(inode_map_doc)
+    print("Keys: {}".format(keys))
 
     print("Created metadata document: {}".format(metadata_doc_id))
     # Debug mode: print out the doc we just created
@@ -150,7 +157,7 @@ async def create_directory_document(name, inode_map_doc_id):
     doc = await node.docs().create()
     directory_doc_id = doc.id()
     # Create the children document and fetch its ID
-    children_doc_id = await create_children_document()
+    children_doc_id = await create_children_document(inode_map_doc_id)
     # Create the metadata document and fetch its ID
     metadata_doc_id = await create_metadata_document(name, directory_doc_id, inode_map_doc_id)
     # Create the directory document
@@ -196,6 +203,7 @@ async def create_root_document(ticket=False):
         doc = await node.doc_join(args.ticket)
         doc_id = doc.id()
         print("Joined doc: {}".format(doc_id))
+        # TODO: Load in inode_map_doc_id
     else:
         doc = await node.docs().create()
         doc_id = doc.id()
@@ -205,14 +213,14 @@ async def create_root_document(ticket=False):
         # Found a root document, return it
         return doc_id, inode_map_doc_id
     elif status == "empty":
-        # No root document found, create a new one
-        await create_new_root_document(doc_id)
-        return doc_id, inode_map_doc_id
+        # No root document found, create a new one and fetch the result
+        directory_doc_id, inode_map_doc_id = await create_new_root_document(doc_id)
+        return doc_id, directory_doc_id, inode_map_doc_id
     elif status == "err_not_root":
         # Found a document of type other than "root document"
         print("Found a document of type other than 'root document'. Bailing!")
         return "state", "err_not_root"
-    return doc_id, inode_map_doc_id
+    return doc_id, directory_doc_id, inode_map_doc_id
 
 async def create_inode_map_document():
     # Create a new inode map document.
@@ -236,7 +244,6 @@ async def create_inode_map_document():
     return inode_map_doc_id
 
 async def create_new_root_document(doc_id):
-    global inode_map_doc_id
     print("Creating new root document in: {}".format(doc_id))
     doc = await node.docs().open(doc_id)
 
@@ -263,17 +270,18 @@ async def create_new_root_document(doc_id):
     # Set the inode number for the root directory to be equal to the inode number of the metadata document
     await inode_map_doc.set_bytes(author, b"1", bytes(str(metadata["st_ino"]), "utf-8"))
     # Set the real inode number to be equal to the document ID for the root directory's document
-    await inode_map_doc.set_bytes(author, bytes(str(metadata["st_ino"]), "utf-8"), bytes(str(doc_id), "utf-8"))
+    await inode_map_doc.set_bytes(author, bytes(str(metadata["st_ino"]), "utf-8"), bytes(str(directory_doc_id), "utf-8"))
 
     # Check that we have a valid inode map document
     assert inode_map_doc_id
 
-    return doc_id, inode_map_doc_id
+    return directory_doc_id, inode_map_doc_id
 
 async def get_metadata_for_doc_id(doc_id):
     # Get inode and other directory info from a DirectoryDoc or FileDoc
     doc = await node.docs().open(doc_id)
     # Lookup metadata key
+    print("Attempting to get metadata for " + doc_id)
     metadata_entry = await doc.get_exact(author, b"metadata", False)
     metadata_doc_id = await metadata_entry.content_bytes(doc)
     # Fetch metadata
@@ -359,7 +367,7 @@ async def main():
     await setup_iroh_node(ticket, debug_mode)
 
     # create or find root document
-    root_doc_id, inode_map_doc_id = await create_root_document()
+    root_doc_id, root_directory_doc_id, inode_map_doc_id = await create_root_document()
 
     # list docs
     docs = await node.docs().list()
