@@ -77,9 +77,9 @@ class RecursoFs(pyfuse3.Operations):
             entry.st_size = len(children)
         else:
             entry.st_size = metadata["st_size"]
-        entry.st_atime_ns = metadata["st_atime"]
-        entry.st_ctime_ns = metadata["st_ctime"]
-        entry.st_mtime_ns = metadata["st_mtime"]
+        entry.st_atime_ns = recurso.convert_seconds_to_ns(metadata["st_atime"])
+        entry.st_ctime_ns = recurso.convert_seconds_to_ns(metadata["st_ctime"])
+        entry.st_mtime_ns = recurso.convert_seconds_to_ns(metadata["st_mtime"])
         entry.st_gid = metadata["st_gid"]
         entry.st_uid = metadata["st_uid"]
         entry.st_ino = inode

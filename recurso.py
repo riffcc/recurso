@@ -3,6 +3,7 @@ import argparse
 import asyncio
 import time
 import uuid
+import stat
 
 # Utility functions
 # These take docs, not doc IDs
@@ -43,6 +44,11 @@ async def get_by_key(doc_id, keyname):
     except Exception as e:
         print(f"Error in get_by_key for key '{keyname}': {str(e)}")
         return None
+
+# These take seconds
+def convert_seconds_to_ns(seconds):
+    seconds_to_ns = int(seconds * 1e9)
+    return seconds_to_ns
 
 # Main functions
 async def scan_root_document(doc_id):
@@ -105,7 +111,7 @@ async def create_children_document(inode_map_doc_id):
     return children_doc_id
 
 # Create a metadata document with the name of a file or directory as well as its DirectoryDoc or FileDoc ID
-async def create_metadata_document(name, doc_id, inode_map_doc_id):
+async def create_metadata_document(name, type, doc_id, inode_map_doc_id):
     print("Creating metadata document")
     # Create the metadata document and fetch its ID
     doc = await node.docs().create()
@@ -124,9 +130,15 @@ async def create_metadata_document(name, doc_id, inode_map_doc_id):
     # 2. Convert UUID to a 64-bit integer
     st_ino = uuid_value.int & 0xFFFFFFFFFFFFFFFF
 
+    # If the type is a directory, set the st_mode to S_IFDIR
+    if type == "directory":
+        st_mode = stat.S_IFDIR | 0o755
+    else:
+        st_mode = stat.S_IFREG | 0o644
+
     # Initial metadata to populate the metadata document 
     metadata = {
-        "st_mode": 0o040755,  # Directory with rwxr-xr-x permissions
+        "st_mode": st_mode,  # Directory with rwxr-xr-x permissions
         "st_ino": st_ino,   # Generated inode number (UUID-based)
         "st_uid": 0,   # Root user ID
         "st_gid": 0,   # Root group ID
@@ -162,7 +174,7 @@ async def create_directory_document(name, inode_map_doc_id):
     # Create the children document and fetch its ID
     children_doc_id = await create_children_document(inode_map_doc_id)
     # Create the metadata document and fetch its ID
-    metadata_doc_id = await create_metadata_document(name, directory_doc_id, inode_map_doc_id)
+    metadata_doc_id = await create_metadata_document(name, "directory", directory_doc_id, inode_map_doc_id)
     # Create the directory document
     await doc.set_bytes(author, b"type", b"directory")
     await doc.set_bytes(author, b"version", b"v0")
@@ -183,7 +195,7 @@ async def create_file_document(name, blob_hash, inode_map_doc_id):
     doc = await node.docs().create()
     file_doc_id = doc.id()
     # Create the metadata document and fetch its ID
-    metadata_doc_id = await create_metadata_document(name, file_doc_id, inode_map_doc_id)
+    metadata_doc_id = await create_metadata_document(name, "file", file_doc_id, inode_map_doc_id)
     # Create the directory document
     await doc.set_bytes(author, b"type", b"file")
     await doc.set_bytes(author, b"version", b"v0")
