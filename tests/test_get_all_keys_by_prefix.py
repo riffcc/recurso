@@ -17,7 +17,10 @@ async def test_create_directory_document():
     await recurso.setup_iroh_node()
     author = recurso.author
 
-    directory_doc_id = await recurso.create_directory_document()
+    root_doc_id, inode_map_doc_id = await recurso.create_root_document()
+    root_document = await recurso.get_document(root_doc_id)
+
+    directory_doc_id = await recurso.create_directory_document("test", inode_map_doc_id)
     directory_document = await recurso.get_document(directory_doc_id)
 
     # Basic smoke tests

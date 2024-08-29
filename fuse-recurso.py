@@ -38,6 +38,7 @@ class RecursoFs(pyfuse3.Operations):
         
         # Create a root document
         root_doc_id = await recurso.create_root_document()
+        print("Root doc ID: {}".format(root_doc_id))
         root_document = await recurso.get_document(root_doc_id)
 
         return root_doc_id

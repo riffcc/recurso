@@ -203,11 +203,11 @@ async def create_root_document(ticket=False):
     state, status = await scan_root_document(doc_id)
     if status == "ok":
         # Found a root document, return it
-        return doc_id
+        return doc_id, inode_map_doc_id
     elif status == "empty":
         # No root document found, create a new one
         await create_new_root_document(doc_id)
-        return doc_id
+        return doc_id, inode_map_doc_id
     elif status == "err_not_root":
         # Found a document of type other than "root document"
         print("Found a document of type other than 'root document'. Bailing!")
