@@ -48,15 +48,19 @@ class RecursoFs(pyfuse3.Operations):
         # Get attributes of given inode (file or directory)
         entry = pyfuse3.EntryAttributes()
         inode_doc_id = None
-        print("ATTEMPT TO LOOKUP INODE" + str(inode))
-        # Lookup the inode in the central inode map
-        inode_doc_id = await recurso.get_by_key(self.inode_map_doc_id, str(inode))
-        print("Inode doc ID: {}".format(inode_doc_id))
-        # Fetch twice if our first fetch was the root inode
-        if inode == pyfuse3.ROOT_INODE:
-            inode_doc_id = await recurso.get_by_key(self.inode_map_doc_id, str(inode_doc_id))
-            print("Inode doc ID: {}".format(inode_doc_id))
-            print("I worked the first time")
+        if inode == pyfuse3.ROOT_INODE or inode == "01101100011011110111011001100101":
+            inode_doc_id = await recurso.get_by_key(self.inode_map_doc_id, str("01101100011011110111011001100101"))
+            if debug_mode:
+                print("Loaded root inode")
+                print("Root inode doc ID: {}".format(inode_doc_id))
+        else:
+            # Lookup the inode in the central inode map
+            inode_doc_id = await recurso.get_by_key(self.inode_map_doc_id, str(inode))
+
+        inode_type = await recurso.get_by_key(inode_doc_id, "type")
+
+        if debug_mode:
+            print("Inode type: {}".format(inode_type))
 
         # Lookup the metadata for the inode
         metadata = await recurso.get_metadata_for_doc_id(inode_doc_id)
@@ -66,11 +70,13 @@ class RecursoFs(pyfuse3.Operations):
             entry.st_mode = (stat.S_IFDIR | 0o755)
 
         # If the inode is a directory, update the size based on the number of children
-        children_doc_id = await recurso.get_by_key(inode_doc_id, "children")
-        children_document = await recurso.get_document(children_doc_id)
-        children = await recurso.get_all_keys_by_prefix(children_document, "fsdir")
-        entry.st_size = len(children)
-
+        if inode_type == "directory":
+            children_doc_id = await recurso.get_by_key(inode_doc_id, "children")
+            children_document = await recurso.get_document(children_doc_id)
+            children = await recurso.get_all_keys_by_prefix(children_document, "fsdir")
+            entry.st_size = len(children)
+        else:
+            entry.st_size = metadata["st_size"]
         entry.st_atime_ns = metadata["st_atime"]
         entry.st_ctime_ns = metadata["st_ctime"]
         entry.st_mtime_ns = metadata["st_mtime"]
@@ -81,8 +87,8 @@ class RecursoFs(pyfuse3.Operations):
         return entry
 
     async def lookup(self, parent_inode, name, ctx=None):
-        if parent_inode != pyfuse3.ROOT_INODE or name != self.hello_name:
-            raise pyfuse3.FUSEError(errno.ENOENT)
+        # if parent_inode != pyfuse3.ROOT_INODE or name != self.hello_name:
+        #     raise pyfuse3.FUSEError(errno.ENOENT)
         return await self.getattr(self.hello_inode)
 
     async def opendir(self, inode, ctx):
@@ -92,14 +98,18 @@ class RecursoFs(pyfuse3.Operations):
         # * Return a handle that will be used in readdir
         # * That it has a valid 64-bit inode
         # For now we'll only have compatibility with the root directory
-        if inode != pyfuse3.ROOT_INODE:
-            raise pyfuse3.FUSEError(errno.ENOENT)
-        else:
-            root_document = await recurso.get_document(root_doc_id)
-            directory_doc_id = await recurso.get_by_key(root_doc_id, "directory")
-            metadata_doc_id = await recurso.get_by_key(directory_doc_id, "metadata")
-            metadata = await recurso.get_metadata(metadata_doc_id)
-            inode = metadata["st_ino"]
+        # if inode != pyfuse3.ROOT_INODE:
+        #     raise pyfuse3.FUSEError(errno.ENOENT)
+        if inode == pyfuse3.ROOT_INODE:
+            # Override the root inode ("1") to the actual root inode
+            inode = "01101100011011110111011001100101"
+
+        print("Attempting to open directory: {}".format(inode))
+        root_document = await recurso.get_document(root_doc_id)
+        directory_doc_id = await recurso.get_by_key(root_doc_id, "directory")
+        metadata_doc_id = await recurso.get_by_key(directory_doc_id, "metadata")
+        metadata = await recurso.get_metadata(metadata_doc_id)
+        inode = metadata["st_ino"]
         return inode
 
     async def readdir(self, fh, start_id, token):
@@ -153,24 +163,25 @@ class RecursoFs(pyfuse3.Operations):
             # To render properly...
             # We'll need to grab the document for that inode
             inode_doc_id = content.decode("utf8")
-            print(inode_doc_id)
             # Get the metadata for the inode
             metadata = await recurso.get_metadata_for_doc_id(inode_doc_id)
 
             # Fetch the inode number
             real_inode = metadata["st_ino"]
-            print("REAL INODE: {}".format(real_inode))
 
-            # Dump a copy of the keys of the inode document
+            # Set attributes for the entry
             try:
-                inode_document = await recurso.get_document(self.inode_map_doc_id)
-                await recurso.print_all_keys(inode_document)
+                print("Getting attributes for: {}".format(real_inode))
+                entry_attributes = await self.getattr(real_inode)
             except Exception as e:
-                print("Error printing inode document: {}".format(e))
+                print("Error getting attributes for inode: {}".format(real_inode))
+                print(e)
+                continue
 
+            print("Getting entry attributes for: {}".format(real_name))
             # Reply with the entry to FUSE
             pyfuse3.readdir_reply(
-                token, real_name, await self.getattr(real_inode), i + 1)
+                token, bytes(real_name, "utf8"), entry_attributes, i + 1)
         return
 
     async def open(self, inode, flags, ctx):

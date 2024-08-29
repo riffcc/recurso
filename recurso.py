@@ -28,14 +28,21 @@ async def print_all_keys(doc):
 async def get_by_key(doc_id, keyname):
     # Fetch the directory document from a key within a doc
     # Get the document we were passed
-    doc = await node.docs().open(doc_id)
-    # Lookup key
-    key_entry = await doc.get_exact(author, bytes(str(keyname), "utf-8"), False)
-    key_doc_id = await key_entry.content_bytes(doc)
-    # Decode the key_doc_id from bytes to string
-    key_doc_id = key_doc_id.decode("utf-8")
-    # Return the directory document ID
-    return key_doc_id
+    try:
+        doc = await node.docs().open(doc_id)
+        # Lookup key
+        key_entry = await doc.get_exact(author, bytes(str(keyname), "utf-8"), False)
+        if key_entry is None:
+            print(f"Key '{keyname}' not found in document {doc_id}")
+            return None
+        key_doc_id = await key_entry.content_bytes(doc)
+        # Decode the key_doc_id from bytes to string
+        key_doc_id = key_doc_id.decode("utf-8")
+        # Return the directory document ID
+        return key_doc_id
+    except Exception as e:
+        print(f"Error in get_by_key for key '{keyname}': {str(e)}")
+        return None
 
 # Main functions
 async def scan_root_document(doc_id):
@@ -105,6 +112,7 @@ async def create_metadata_document(name, doc_id, inode_map_doc_id):
     metadata_doc_id = doc.id()
     # Create the metadata document itself
     await doc.set_bytes(author, b"type", b"metadata")
+    # Set the barename of the file.
     await doc.set_bytes(author, b"name", bytes(str(name), "utf-8"))
     await doc.set_bytes(author, b"version", b"v0")
     await doc.set_bytes(author, b"created", bytes(str(time.time()), "utf-8"))
@@ -137,12 +145,8 @@ async def create_metadata_document(name, doc_id, inode_map_doc_id):
     print("Loaded inode map document: {}".format(inode_map_doc_id))
 
     # Push the origin document ID into the central inode map
-    print("Pushing inode map item name {} for inode {}".format(name, st_ino))
-    await inode_map_doc.set_bytes(author, bytes(str(st_ino), "utf-8"), bytes(str(doc_id), "utf-8"))
-
-    # Grab all keys from the inode map document
-    print("Printing all keys from the inode map document")
-    keys = await print_all_keys(inode_map_doc)
+    print("Pushing inode map item name {} for inode {}".format(name, metadata["st_ino"]))
+    await inode_map_doc.set_bytes(author, bytes(str(metadata["st_ino"]), "utf-8"), bytes(str(doc_id), "utf-8"))
 
     print("Created metadata document: {}".format(metadata_doc_id))
     # Debug mode: print out the doc we just created
@@ -266,8 +270,8 @@ async def create_new_root_document(doc_id):
 
     # Fetch the inode number for the root directory's directory document
     metadata = await get_metadata_for_doc_id(directory_doc_id)
-    # Set the inode number for the root directory to be equal to the inode number of the metadata document
-    await inode_map_doc.set_bytes(author, b"1", bytes(str(metadata["st_ino"]), "utf-8"))
+    # Set the inode number for the root directory to be equal to the document ID for the root directory's document
+    await inode_map_doc.set_bytes(author, bytes(str("01101100011011110111011001100101"), "utf-8"), bytes(str(directory_doc_id), "utf-8"))
     # Set the real inode number to be equal to the document ID for the root directory's document
     await inode_map_doc.set_bytes(author, bytes(str(metadata["st_ino"]), "utf-8"), bytes(str(directory_doc_id), "utf-8"))
 
@@ -280,7 +284,8 @@ async def get_metadata_for_doc_id(doc_id):
     # Get inode and other directory info from a DirectoryDoc or FileDoc
     doc = await node.docs().open(doc_id)
     # Lookup metadata key
-    print("Attempting to get metadata for " + doc_id)
+    if debug_mode:
+        print("Attempting to get metadata for " + doc_id)
     metadata_entry = await doc.get_exact(author, b"metadata", False)
     metadata_doc_id = await metadata_entry.content_bytes(doc)
     # Fetch metadata
