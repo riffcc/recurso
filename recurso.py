@@ -141,9 +141,8 @@ async def create_metadata_document(name, doc_id, inode_map_doc_id):
     await inode_map_doc.set_bytes(author, bytes(str(st_ino), "utf-8"), bytes(str(doc_id), "utf-8"))
 
     # Grab all keys from the inode map document
-    print("Grabbing all keys from the inode map document")
-    keys = await get_all_keys(inode_map_doc)
-    print("Keys: {}".format(keys))
+    print("Printing all keys from the inode map document")
+    keys = await print_all_keys(inode_map_doc)
 
     print("Created metadata document: {}".format(metadata_doc_id))
     # Debug mode: print out the doc we just created

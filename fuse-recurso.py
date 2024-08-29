@@ -37,12 +37,12 @@ class RecursoFs(pyfuse3.Operations):
         self.recurso = await recurso.setup_iroh_node(debug=debug_mode)
         
         # Create a root document
-        root_doc_id, root_directory_doc_id, inode_map_doc_id = await recurso.create_root_document()
+        self.root_doc_id, self.root_directory_doc_id, self.inode_map_doc_id = await recurso.create_root_document()
         # print("Root doc ID: {}".format(root_doc_id))
         # print("Root directory doc ID: {}".format(root_directory_doc_id))
-        root_document = await recurso.get_document(root_doc_id)
+        root_document = await recurso.get_document(self.root_doc_id)
 
-        return root_doc_id, inode_map_doc_id
+        return self.root_doc_id, self.inode_map_doc_id
 
     async def getattr(self, inode, ctx=None):
         # Get attributes of given inode (file or directory)
@@ -50,11 +50,11 @@ class RecursoFs(pyfuse3.Operations):
         inode_doc_id = None
         print("ATTEMPT TO LOOKUP INODE" + str(inode))
         # Lookup the inode in the central inode map
-        inode_doc_id = await recurso.get_by_key(recurso.inode_map_doc_id, str(inode))
+        inode_doc_id = await recurso.get_by_key(self.inode_map_doc_id, str(inode))
         print("Inode doc ID: {}".format(inode_doc_id))
         # Fetch twice if our first fetch was the root inode
         if inode == pyfuse3.ROOT_INODE:
-            inode_doc_id = await recurso.get_by_key(recurso.inode_map_doc_id, str(inode_doc_id))
+            inode_doc_id = await recurso.get_by_key(self.inode_map_doc_id, str(inode_doc_id))
             print("Inode doc ID: {}".format(inode_doc_id))
             print("I worked the first time")
 
@@ -104,20 +104,20 @@ class RecursoFs(pyfuse3.Operations):
 
     async def readdir(self, fh, start_id, token):
         # Make sure we have a pointer to the inode map document
-        if not recurso.inode_map_doc_id:
+        if not self.inode_map_doc_id:
             print("Panic! No inode map ID found!")
             sys.exit(1)
 
-        # TEMPORARY BEGIN: Restrict to root inode
-        # Lookup the real root inode number from the inode map
-        root_inode_number = await recurso.get_by_key(recurso.inode_map_doc_id, "1")
+        # # TEMPORARY BEGIN: Restrict to root inode
+        # # Lookup the real root inode number from the inode map
+        # root_inode_number = await recurso.get_by_key(self.inode_map_doc_id, "1")
     
-        # Fail if we're not in the root inode
-        assert fh in (pyfuse3.ROOT_INODE, int(root_inode_number)), "File handle is not the root inode."
-        # TEMPORARY END
+        # # Fail if we're not in the root inode
+        # assert fh in (pyfuse3.ROOT_INODE, int(root_inode_number)), "File handle is not the root inode."
+        # # TEMPORARY END
 
         # Lookup the directory by inode from the central inode map
-        directory_doc_id = await recurso.get_by_key(recurso.inode_map_doc_id, str(fh))
+        directory_doc_id = await recurso.get_by_key(self.inode_map_doc_id, str(fh))
 
         # Lookup the metadata for the directory
         metadata = await recurso.get_metadata_for_doc_id(directory_doc_id)
@@ -163,7 +163,7 @@ class RecursoFs(pyfuse3.Operations):
 
             # Dump a copy of the keys of the inode document
             try:
-                inode_document = await recurso.get_document(recurso.inode_map_doc_id)
+                inode_document = await recurso.get_document(self.inode_map_doc_id)
                 await recurso.print_all_keys(inode_document)
             except Exception as e:
                 print("Error printing inode document: {}".format(e))
