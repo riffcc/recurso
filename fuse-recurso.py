@@ -47,6 +47,7 @@ class RecursoFs(pyfuse3.Operations):
     async def getattr(self, inode, ctx=None):
         # Get attributes of given inode (file or directory)
         entry = pyfuse3.EntryAttributes()
+        # Clear the inode doc ID just in case
         inode_doc_id = None
         if inode == pyfuse3.ROOT_INODE or inode == "01101100011011110111011001100101":
             inode_doc_id = await recurso.get_by_key(self.inode_map_doc_id, str("01101100011011110111011001100101"))
