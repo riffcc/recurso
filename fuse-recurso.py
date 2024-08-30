@@ -42,6 +42,7 @@ class RecursoFs(pyfuse3.Operations):
 
         return self.root_doc_id, self.inode_map_doc_id
 
+
     async def getattr(self, inode, ctx=None):
         # Get attributes of given inode (file or directory)
         entry = pyfuse3.EntryAttributes()
@@ -88,6 +89,7 @@ class RecursoFs(pyfuse3.Operations):
         return entry
 
     async def lookup(self, parent_inode, name, ctx=None):
+        print("Lookup called for: {}".format(name))
         # if parent_inode != pyfuse3.ROOT_INODE or name != self.hello_name:
         if parent_inode == pyfuse3.ROOT_INODE:
             print("Parent inode is root")
@@ -117,14 +119,14 @@ class RecursoFs(pyfuse3.Operations):
         # Lookup the key name in the children document
         # Try it as a directory first
         try:
-            child_doc_id = await recurso.get_by_key(children_doc_id, "fsdir-" + name)
+            child_doc_id = await recurso.get_by_key(children_doc_id, "fsdir-" + name + "...RECURSO.UNiQ.v0")
         except Exception as e:
             # This is a soft error, we might be looking for a file
             pass
         # If we didn't find a directory, try a file
         if not child_doc_id or child_doc_id == None:
             try:
-                child_doc_id = await recurso.get_by_key(children_doc_id, "fsfile-" + name)
+                child_doc_id = await recurso.get_by_key(children_doc_id, "fsfile-" + name + "...RECURSO.UNiQ.v0")
             except Exception as e:
                 # If we got here, we couldn't find a file or directory with that name
                 print("Could not find child metadata for {}".format(name))
@@ -198,6 +200,7 @@ class RecursoFs(pyfuse3.Operations):
                 continue
             real_name = entry.key().decode("utf8")
             real_name = real_name[real_name.find("-") + 1:]
+            real_name = real_name.split('...RECURSO.UNiQ.v0')[0]
             hash = entry.content_hash()
             content = await entry.content_bytes(children_document)
 
@@ -246,6 +249,50 @@ class RecursoFs(pyfuse3.Operations):
         # Return the data
         return file[off:off+size]
 
+    async def unlink(self, parent_inode, name, ctx):
+        print(f"Deleting file: {name} from parent inode: {parent_inode}")
+
+        # Convert name from bytes to a string
+        name = name.decode("utf8")
+
+        # Look up the parent inode document in the inode map
+        parent_inode_doc_id = await recurso.get_by_key(self.inode_map_doc_id, str(parent_inode))
+
+        # Load the children document from the parent inode
+        children_doc_id = await recurso.get_by_key(parent_inode_doc_id, "children")
+
+        try:
+            # Try to find the file in the children document
+            child_doc_id = await recurso.get_by_key(children_doc_id, recurso.encode_filename(name, "file"))
+        except Exception as e:
+            # If we can't find the file, raise an error
+            raise pyfuse3.FUSEError(errno.ENOENT)
+
+        # Get the inode of the file to be deleted
+        metadata_doc_id = await recurso.get_by_key(child_doc_id, "metadata")
+        inode = await recurso.get_by_key(metadata_doc_id, "st_ino")
+
+        # Remove the file entry from the parent's children document
+        await recurso.delete_key(children_doc_id, recurso.encode_filename(name, "file"))
+
+        # Remove the file's inode entry from the inode map
+        await recurso.delete_key(self.inode_map_doc_id, str(inode))
+
+        # Delete the file's document and associated metadata
+        await recurso.delete_document(child_doc_id)
+        await recurso.delete_document(metadata_doc_id)
+
+        # If the file has an associated blob, delete it
+        try:
+            blobhash = await recurso.get_by_key(child_doc_id, "blob")
+            await recurso.delete_blob(blobhash)
+        except Exception as e:
+            # If there's no blob, we can ignore this error
+            pass
+
+        print(f"File {name} successfully deleted")
+
+
 def init_logging(debug=False):
     formatter = logging.Formatter('%(asctime)s.%(msecs)03d %(threadName)s: '
                                   '[%(name)s] %(message)s', datefmt="%Y-%m-%d %H:%M:%S")
@@ -291,6 +338,7 @@ async def main():
 
     fuse_options = set(pyfuse3.default_options)
     fuse_options.add('fsname=recurso')
+    fuse_options.discard('default_permissions')
     if options.debug_fuse:
         fuse_options.add('debug')
     pyfuse3.init(recursofs, options.mountpoint, fuse_options)

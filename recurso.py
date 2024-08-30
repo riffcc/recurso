@@ -48,6 +48,21 @@ async def get_by_key(doc_id, keyname):
         print(f"Error in get_by_key for key '{keyname}': {str(e)}")
         return None
 
+# Encode a filename into a valid keyname for a children document.
+async def encode_filename(name, type):
+    if type == "file":
+        return "fsfile-" + name + '...RECURSO.UNiQ.v0'
+    elif type == "directory":
+        return "fsdir-" + name + '...RECURSO.UNiQ.v0'
+
+async def decode_filename(keyname):
+    if keyname.startswith("fsfile-"):
+        return "file", keyname[7:].split('...RECURSO.UNiQ.v0')[0]
+    elif keyname.startswith("fsdir-"):
+        return "directory", keyname[6:].split('...RECURSO.UNiQ.v0')[0]
+    else:
+        return None, None
+
 # Accepts bytes for the value. Make sure to convert to bytes before using this function.
 async def set_by_key(doc_id, keyname, value):
     # Get the document we were passed
@@ -57,6 +72,32 @@ async def set_by_key(doc_id, keyname, value):
         await doc.set_bytes(author, bytes(str(keyname), "utf-8"), value)
     except Exception as e:
         print(f"Error in set_by_key for key '{keyname}': {str(e)}")
+        return None
+    
+async def delete_key(doc_id, keyname):
+    # Get the document we were passed
+    try:
+        doc = await node.docs().open(doc_id)
+        # Delete the value
+        await doc.delete(author, bytes(str(keyname), "utf-8"))
+    except Exception as e:
+        print(f"Error in delete_key for key '{keyname}': {str(e)}")
+        return None
+    
+async def delete_document(doc_id):
+    # Get the document we were passed
+    try:
+        doc = await node.docs().drop(doc_id)
+    except Exception as e:
+        print(f"Error in delete_document for doc '{doc_id}': {str(e)}")
+        return None
+    
+async def delete_blob(blob_hash):
+    # Get the blob we were passed
+    try:
+        blob = await node.blobs().delete_blob(blob_hash)
+    except Exception as e:
+        print(f"Error in delete_blob for blob '{blob_hash}': {str(e)}")
         return None
 
 # These take seconds
@@ -321,18 +362,15 @@ async def create_new_root_document(doc_id):
     await inode_map_doc.set_bytes(author, bytes(str(metadata["st_ino"]), "utf-8"), bytes(str(directory_doc_id), "utf-8"))
 
     # Create dummy files, push them into the children list
+    children_doc_id = await get_by_key(directory_doc_id, "children")
     created_file_id = await create_dummy_file_document("example.txt", 5, inode_map_doc_id)
-    children_doc_id = await get_by_key(directory_doc_id, "children")
-    await set_by_key(children_doc_id, "fsfile-example.txt", bytes(str(created_file_id), "utf-8"))
+    await set_by_key(children_doc_id, await encode_filename("example.txt", "file"), bytes(str(created_file_id), "utf-8"))
     created_file_id = await create_dummy_file_document("example2.txt", 512, inode_map_doc_id)
-    children_doc_id = await get_by_key(directory_doc_id, "children")
-    await set_by_key(children_doc_id, "fsfile-example2.txt", bytes(str(created_file_id), "utf-8"))
+    await set_by_key(children_doc_id, await encode_filename("example2.txt", "file"), bytes(str(created_file_id), "utf-8"))
     created_file_id = await create_dummy_file_document("hello.txt", 1024, inode_map_doc_id)
-    children_doc_id = await get_by_key(directory_doc_id, "children")
-    await set_by_key(children_doc_id, "fsfile-hello.txt", bytes(str(created_file_id), "utf-8"))
+    await set_by_key(children_doc_id, await encode_filename("hello.txt", "file"), bytes(str(created_file_id), "utf-8"))
     created_file_id = await create_dummy_file_document("world.txt", 10240, inode_map_doc_id)
-    children_doc_id = await get_by_key(directory_doc_id, "children")
-    await set_by_key(children_doc_id, "fsfile-world.txt", bytes(str(created_file_id), "utf-8"))
+    await set_by_key(children_doc_id, await encode_filename("world.txt", "file"), bytes(str(created_file_id), "utf-8"))
 
     # Check that we have a valid inode map document
     assert inode_map_doc_id
