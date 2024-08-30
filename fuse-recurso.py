@@ -38,8 +38,6 @@ class RecursoFs(pyfuse3.Operations):
         
         # Create a root document
         self.root_doc_id, self.root_directory_doc_id, self.inode_map_doc_id = await recurso.create_root_document()
-        # print("Root doc ID: {}".format(root_doc_id))
-        # print("Root directory doc ID: {}".format(root_directory_doc_id))
         root_document = await recurso.get_document(self.root_doc_id)
 
         return self.root_doc_id, self.inode_map_doc_id
@@ -57,6 +55,7 @@ class RecursoFs(pyfuse3.Operations):
         else:
             # Lookup the inode in the central inode map
             inode_doc_id = await recurso.get_by_key(self.inode_map_doc_id, str(inode))
+        print("Getting attributes for inode: {}".format(inode))
 
         inode_type = await recurso.get_by_key(inode_doc_id, "type")
 
@@ -74,7 +73,7 @@ class RecursoFs(pyfuse3.Operations):
         if inode_type == "directory":
             children_doc_id = await recurso.get_by_key(inode_doc_id, "children")
             children_document = await recurso.get_document(children_doc_id)
-            children = await recurso.get_all_keys_by_prefix(children_document, "fsdir")
+            children = await recurso.get_all_keys_by_prefix(children_document, "fs")
             entry.st_size = len(children)
         else:
             entry.st_size = metadata["st_size"]
@@ -84,13 +83,59 @@ class RecursoFs(pyfuse3.Operations):
         entry.st_gid = metadata["st_gid"]
         entry.st_uid = metadata["st_uid"]
         entry.st_ino = inode
-
         return entry
 
     async def lookup(self, parent_inode, name, ctx=None):
         # if parent_inode != pyfuse3.ROOT_INODE or name != self.hello_name:
-        #     raise pyfuse3.FUSEError(errno.ENOENT)
-        return await self.getattr(self.hello_inode)
+        if parent_inode == pyfuse3.ROOT_INODE:
+            print("Parent inode is root")
+            # Find the base document for the root
+            root_document_inode = "01101100011011110111011001100101"
+            # Find the document ID for the root document
+            root_document_doc_id = await recurso.get_by_key(self.inode_map_doc_id, root_document_inode)
+            # Grab the metadata document for the root document
+            metadata_doc_id = await recurso.get_by_key(root_document_doc_id, "metadata")
+            # Grab the inode number from the metadata document
+            parent_inode = await recurso.get_by_key(metadata_doc_id, "st_ino")
+        print("Parent inode: {}".format(parent_inode))
+
+        # Look up the parent inode document in the inode map
+        parent_inode_doc_id = await recurso.get_by_key(self.inode_map_doc_id, str(parent_inode))
+        print("Parent inode doc ID: {}".format(parent_inode_doc_id))
+
+        # Load the children document from the parent inode
+        children_doc_id = await recurso.get_by_key(parent_inode_doc_id, "children")
+        print("Children doc ID: {}".format(children_doc_id))
+
+        print("Looking for lost child: {}".format(name))
+
+
+        # Lookup the key name in the children document
+        # Try it as a directory first
+        try:
+            child_doc_id = await recurso.get_by_key(children_doc_id, "fsdir-" + name)
+        except Exception as e:
+            # This is a soft error, we might be looking for a file
+            pass
+        # If we didn't find a directory, try a file
+        if not child_doc_id or child_doc_id == None:
+            try:
+                child_doc_id = await recurso.get_by_key(children_doc_id, "fsfile-" + name)
+            except Exception as e:
+                # If we got here, we couldn't find a file or directory with that name
+                print("Could not find child metadata for {}".format(name))
+                raise pyfuse3.FUSEError(errno.ENOENT)
+        if debug_mode:
+            print("Found child doc ID: {}".format(child_doc_id))
+            print("Pulling metadata for child doc ID: {}".format(child_doc_id))
+        # We've got a place to pull metadata, let's get the inode
+        metadata_doc_id = await recurso.get_by_key(child_doc_id, "metadata")
+        if debug_mode:
+            print("Child metadata doc ID: {}".format(metadata_doc_id))
+        inode = await recurso.get_by_key(metadata_doc_id, "st_ino")
+        if debug_mode:
+            print("Child inode: {}".format(inode))
+        return await self.getattr(inode)
 
     async def opendir(self, inode, ctx):
         # We're opening a directory, so we should figure out
@@ -106,7 +151,6 @@ class RecursoFs(pyfuse3.Operations):
             inode = "01101100011011110111011001100101"
 
         print("Attempting to open directory: {}".format(inode))
-        root_document = await recurso.get_document(root_doc_id)
         directory_doc_id = await recurso.get_by_key(root_doc_id, "directory")
         metadata_doc_id = await recurso.get_by_key(directory_doc_id, "metadata")
         metadata = await recurso.get_metadata(metadata_doc_id)
@@ -118,14 +162,6 @@ class RecursoFs(pyfuse3.Operations):
         if not self.inode_map_doc_id:
             print("Panic! No inode map ID found!")
             sys.exit(1)
-
-        # # TEMPORARY BEGIN: Restrict to root inode
-        # # Lookup the real root inode number from the inode map
-        # root_inode_number = await recurso.get_by_key(self.inode_map_doc_id, "1")
-    
-        # # Fail if we're not in the root inode
-        # assert fh in (pyfuse3.ROOT_INODE, int(root_inode_number)), "File handle is not the root inode."
-        # # TEMPORARY END
 
         # Lookup the directory by inode from the central inode map
         directory_doc_id = await recurso.get_by_key(self.inode_map_doc_id, str(fh))
@@ -180,7 +216,7 @@ class RecursoFs(pyfuse3.Operations):
                 continue
 
             print("Getting entry attributes for: {}".format(real_name))
-            # Reply with the entry to FUSE
+            
             pyfuse3.readdir_reply(
                 token, bytes(real_name, "utf8"), entry_attributes, i + 1)
         return
@@ -194,6 +230,7 @@ class RecursoFs(pyfuse3.Operations):
         return pyfuse3.FileInfo(fh=inode)
 
     async def read(self, fh, off, size):
+        print("Reading from inode: {}".format(fh))
         assert fh == self.hello_inode
         return self.hello_data[off:off+size]
 
