@@ -34,7 +34,8 @@ async def get_by_key(doc_id, keyname):
         # Lookup key
         key_entry = await doc.get_exact(author, bytes(str(keyname), "utf-8"), False)
         if key_entry is None:
-            print(f"Key '{keyname}' not found in document {doc_id}")
+            if debug_mode:
+                print(f"Key '{keyname}' not found in document {doc_id}")
             return None
         key_doc_id = await key_entry.content_bytes(doc)
         # Decode the key_doc_id from bytes to string
