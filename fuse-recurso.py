@@ -28,20 +28,24 @@ class RecursoFs(pyfuse3.Operations):
         self.hello_inode = pyfuse3.ROOT_INODE+1
         self.hello_data = b"hello recurso\n"
         self.recurso = None
+        self.ticket = None
 
-    async def load_recurso(self):
+    async def load_recurso(self, ticket=None):
         global recurso
-        # TODO: Allow for a ticket to be passed in
 
         # Start the Recurso node
         self.recurso = await recurso.setup_iroh_node(debug=debug_mode)
         
         # Create a root document
-        self.root_doc_id, self.root_directory_doc_id, self.inode_map_doc_id = await recurso.create_root_document()
-        root_document = await recurso.get_document(self.root_doc_id)
+        self.root_doc_id, self.root_directory_doc_id, self.inode_map_doc_id = await recurso.create_root_document(ticket)
+        # Load our root document
+        root_doc = await recurso.node.docs().open(self.root_doc_id)
+        # Create a ticket to join the root document
+        ticket = await root_doc.share(recurso.iroh.ShareMode.WRITE, recurso.iroh.AddrInfoOptions.ID)
+        print("To join another node, use this ticket: {}".format(ticket))
+        print("You can use the command: `python3 fuse-recurso.py /mnt/test --ticket {}".format(ticket) + "`")
 
         return self.root_doc_id, self.inode_map_doc_id
-
 
     async def getattr(self, inode, ctx=None):
         # Get attributes of given inode (file or directory)
@@ -318,6 +322,8 @@ def parse_args():
                         help='Enable debugging output')
     parser.add_argument('--debug-fuse', action='store_true', default=False,
                         help='Enable FUSE debugging output')
+    parser.add_argument('--ticket', type=str, default=False, 
+                        help='ticket to join a root document. If provided, will attempt to join a cluster')
     return parser.parse_args()
 
 async def main():
@@ -326,6 +332,7 @@ async def main():
     global debug_mode
 
     debug_mode = False
+    ticket = None
     options = parse_args()
 
     if options.debug:
@@ -334,7 +341,9 @@ async def main():
     init_logging(options.debug)
 
     recursofs = RecursoFs()
-    root_doc_id, inode_map_doc_id = await recursofs.load_recurso()
+    if options.ticket:
+        ticket = recurso.iroh.DocTicket(options.ticket)
+    root_doc_id, inode_map_doc_id = await recursofs.load_recurso(ticket)
 
     fuse_options = set(pyfuse3.default_options)
     fuse_options.add('fsname=recurso')

@@ -113,6 +113,8 @@ async def scan_root_document(doc_id):
     # Fetch all keys from the root document
     query = iroh.Query.all(None)
     entries = await doc.get_many(query)
+    # Wait until doc is ready
+    print("Entries: {}".format(entries))
     #print("Keys: {}".format(entries))
     # Check if we have a type set
     if "type" in entries:
@@ -134,6 +136,9 @@ async def scan_root_document(doc_id):
             return "state", "err_not_root"
     else:
         print("No type set and no odd markers found. Creating as empty rootdoc...")
+        print("Dumping all entries")
+        for entry in entries:
+            print(entry)
         return "state", "empty"
 
 async def create_children_document(inode_map_doc_id):
@@ -285,14 +290,13 @@ async def create_dummy_file_document(name, size, inode_map_doc_id):
     await set_by_key(file_doc_id, "blob", bytes(str(add_outcome.hash), "utf-8"))
     return file_doc_id
 
-async def create_root_document(ticket=False):# 
+async def create_root_document(ticket=False):
     # Find or create a root document for Recurso to use.
     # If we've been given a ticket
     if ticket:
-        doc = await node.doc_join(args.ticket)
+        doc = await node.docs().join(ticket)
         doc_id = doc.id()
-        print("Joined doc: {}".format(doc_id))
-        # TODO: Load in inode_map_doc_id
+        print("Joined root doc: {}".format(doc_id))
     else:
         doc = await node.docs().create()
         doc_id = doc.id()
@@ -300,7 +304,10 @@ async def create_root_document(ticket=False):#
     state, status = await scan_root_document(doc_id)
     if status == "ok":
         # Found a root document, return it
-        return doc_id, inode_map_doc_id
+        # Scan the document for the directoy and inode map doc IDs
+        directory_doc_id = await get_by_key(doc_id, "directory")
+        inode_map_doc_id = await get_by_key(doc_id, "inode_map")
+        return doc_id, directory_doc_id, inode_map_doc_id
     elif status == "empty":
         # No root document found, create a new one and fetch the result
         directory_doc_id, inode_map_doc_id = await create_new_root_document(doc_id)
@@ -309,7 +316,6 @@ async def create_root_document(ticket=False):#
         # Found a document of type other than "root document"
         print("Found a document of type other than 'root document'. Bailing!")
         return "state", "err_not_root"
-    return doc_id, directory_doc_id, inode_map_doc_id
 
 async def create_inode_map_document():
     # Create a new inode map document.
@@ -490,12 +496,21 @@ async def main():
         debug_mode = True
     if args.ticket:
         ticket = args.ticket
+        ticket = iroh.DocTicket(ticket)
+        print("Loaded ticket")
 
     # Setup iroh node
     await setup_iroh_node(ticket, debug_mode)
 
     # create or find root document
-    root_doc_id, root_directory_doc_id, inode_map_doc_id = await create_root_document()
+    root_doc_id, root_directory_doc_id, inode_map_doc_id = await create_root_document(ticket=ticket)
+
+    # Load our root document
+    root_doc = await node.docs().open(root_doc_id)
+    # Create a ticket to join the root document
+    ticket = await root_doc.share(iroh.ShareMode.WRITE, iroh.AddrInfoOptions.RELAY)
+    print("To join another node, use this ticket: {}".format(ticket))
+    print("You can use the command: `python3 fuse-recurso.py /mnt/test --ticket {}".format(ticket) + "`")
 
     # list docs
     docs = await node.docs().list()
@@ -503,7 +518,14 @@ async def main():
     for doc in docs:
         print("\t{}".format(doc))
 
-    return 0
+    # Stay alive until we get a SIGINT
+    try:
+        while True:
+            time.sleep(1)
+    except KeyboardInterrupt:
+        print("SIGINT or CTRL-C detected. Exiting...")
+    finally:
+        print("Exiting...")
     exit()
 
 
