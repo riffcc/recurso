@@ -65,10 +65,6 @@ class RecursoFs(pyfuse3.Operations):
         # Lookup the metadata for the inode
         metadata = await recurso.get_metadata_for_doc_id(inode_doc_id)
 
-        if inode == pyfuse3.ROOT_INODE:
-            # Force root to always be 0o755 permissions
-            entry.st_mode = (stat.S_IFDIR | 0o755)
-
         # If the inode is a directory, update the size based on the number of children
         if inode_type == "directory":
             children_doc_id = await recurso.get_by_key(inode_doc_id, "children")
@@ -77,6 +73,12 @@ class RecursoFs(pyfuse3.Operations):
             entry.st_size = len(children)
         else:
             entry.st_size = metadata["st_size"]
+
+        if inode == pyfuse3.ROOT_INODE:
+            # Force root to always be 0o755 permissions
+            entry.st_mode = (stat.S_IFDIR | 0o755)
+        else:
+            entry.st_mode = metadata["st_mode"]
         entry.st_atime_ns = recurso.convert_seconds_to_ns(metadata["st_atime"])
         entry.st_ctime_ns = recurso.convert_seconds_to_ns(metadata["st_ctime"])
         entry.st_mtime_ns = recurso.convert_seconds_to_ns(metadata["st_mtime"])
