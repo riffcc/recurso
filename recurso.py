@@ -237,9 +237,11 @@ async def create_dummy_file_document(name, size, inode_map_doc_id):
     assert add_outcome.format == iroh.BlobFormat.RAW
     assert add_outcome.size == size
 
+    print("add_outcome.hash: {}".format(add_outcome.hash))
+
     file_doc_id = await create_file_document(name, size, add_outcome.hash, inode_map_doc_id)
     # Insert the uploaded blob to the file document
-    await set_by_key(file_doc_id, "blob", bytes(str(file_doc_id), "utf-8"))
+    await set_by_key(file_doc_id, "blob", bytes(str(add_outcome.hash), "utf-8"))
     return file_doc_id
 
 async def create_root_document(ticket=False):# 
@@ -383,6 +385,14 @@ async def get_document(doc_id):
     doc = await node.docs().open(doc_id)
     return doc
 
+async def get_blob(blob_hash):
+    print("Trying to grab blob: {}".format(blob_hash))
+    hash = iroh.Hash.from_string(blob_hash)
+    print("hash: {}".format(str(hash)))
+    blob = await node.blobs().read_to_bytes(hash)
+    print("read_to_bytes {}", blob)
+    return blob
+
 async def setup_iroh_node(ticket=False, debug=False):
     global node
     global author
@@ -403,6 +413,23 @@ async def setup_iroh_node(ticket=False, debug=False):
     # Get and set default author globally
     author = await node.authors().default()
     print(f"Default author: {author}")
+
+# Classes
+class AddCallback:
+    hash = None
+    format = None
+
+    async def progress(x, progress_event):
+        print(progress_event.type())
+        if progress_event.type() == iroh.AddProgressType.ALL_DONE:
+            all_done_event = progress_event.as_all_done()
+            x.hash = all_done_event.hash
+            print(all_done_event.hash)
+            print(all_done_event.format)
+            x.format = all_done_event.format
+        if progress_event.type() == iroh.AddProgressType.ABORT:
+            abort_event = progress_event.as_abort()
+            raise Exception(abort_event.error)
 
 async def main():
     global node

@@ -233,8 +233,18 @@ class RecursoFs(pyfuse3.Operations):
 
     async def read(self, fh, off, size):
         print("Reading from inode: {}".format(fh))
-        assert fh == self.hello_inode
-        return self.hello_data[off:off+size]
+        # Check that the inode exists by looking it up in the inode map
+        try:
+            # Find the document ID for the inode, based on the file handle we're reading from
+            inode_doc_id = await recurso.get_by_key(self.inode_map_doc_id, fh)
+        except Exception as e:
+            print("Could not get inode document for inode/file handle: {}".format(fh))
+            raise pyfuse3.FUSEError(errno.ENOENT)
+        # Fetch the file using the blobhash
+        blobhash = await recurso.get_by_key(inode_doc_id, "blob")
+        file = await recurso.get_blob(blobhash)
+        # Return the data
+        return file[off:off+size]
 
 def init_logging(debug=False):
     formatter = logging.Formatter('%(asctime)s.%(msecs)03d %(threadName)s: '
