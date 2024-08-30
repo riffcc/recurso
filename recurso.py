@@ -4,6 +4,8 @@ import asyncio
 import time
 import uuid
 import stat
+import random
+import string
 
 # Utility functions
 # These take docs, not doc IDs
@@ -44,6 +46,17 @@ async def get_by_key(doc_id, keyname):
         return key_doc_id
     except Exception as e:
         print(f"Error in get_by_key for key '{keyname}': {str(e)}")
+        return None
+
+# Accepts bytes for the value. Make sure to convert to bytes before using this function.
+async def set_by_key(doc_id, keyname, value):
+    # Get the document we were passed
+    try:
+        doc = await node.docs().open(doc_id)
+        # Set the value
+        await doc.set_bytes(author, bytes(str(keyname), "utf-8"), value)
+    except Exception as e:
+        print(f"Error in set_by_key for key '{keyname}': {str(e)}")
         return None
 
 # These take seconds
@@ -87,10 +100,6 @@ async def create_children_document(inode_map_doc_id):
     # Create the children document and fetch its ID
     doc = await node.docs().create()
     children_doc_id = doc.id()
-    # DEBUG: Force upload a file
-    add_outcome = await node.blobs().add_bytes(b"hello from recurso, reading real files")
-    assert add_outcome.format == iroh.BlobFormat.RAW
-    assert add_outcome.size == 38
     # Create the children document itself
     await doc.set_bytes(author, b"type", b"children")
     await doc.set_bytes(author, b"version", b"v0")
@@ -101,9 +110,6 @@ async def create_children_document(inode_map_doc_id):
     # await doc.set_bytes(author, b"fsdir-give", b"rheibcmkl4jn63iolncyffoxyhoe327unn5wndwvmvkb5dmnxsjq")
     # await doc.set_bytes(author, b"fsdir-you", b"rheibcmkl4jn63iolncyffoxyhoe327unn5wndwvmvkb5dmnxsjq")
     # await doc.set_bytes(author, b"fsdir-up", b"rheibcmkl4jn63iolncyffoxyhoe327unn5wndwvmvkb5dmnxsjq")
-    # Upload a file
-    file_doc_id = await create_file_document("hello-world", add_outcome.hash, inode_map_doc_id)
-    await doc.set_bytes(author, b"fsfile-hello-world", bytes(str(file_doc_id), "utf-8"))
     print("Created children document: {}".format(children_doc_id))
     # Debug mode: print out the doc we just created
     if debug_mode:
@@ -112,7 +118,7 @@ async def create_children_document(inode_map_doc_id):
     return children_doc_id
 
 # Create a metadata document with the name of a file or directory as well as its DirectoryDoc or FileDoc ID
-async def create_metadata_document(name, type, doc_id, inode_map_doc_id):
+async def create_metadata_document(name, type, doc_id, inode_map_doc_id, size):
     print("Creating metadata document")
     # Create the metadata document and fetch its ID
     doc = await node.docs().create()
@@ -143,7 +149,7 @@ async def create_metadata_document(name, type, doc_id, inode_map_doc_id):
         "st_ino": st_ino,   # Generated inode number (UUID-based)
         "st_uid": 0,   # Root user ID
         "st_gid": 0,   # Root group ID
-        "st_size": 0,  # Initial size (empty directory)
+        "st_size": size,  # Initial size (empty if directory, size if file)
         "st_atime": int(time.time()), # Time of last access
         "st_mtime": int(time.time()), # Time of last modification
         "st_ctime": int(time.time()), # Time of last status change
@@ -175,7 +181,7 @@ async def create_directory_document(name, inode_map_doc_id):
     # Create the children document and fetch its ID
     children_doc_id = await create_children_document(inode_map_doc_id)
     # Create the metadata document and fetch its ID
-    metadata_doc_id = await create_metadata_document(name, "directory", directory_doc_id, inode_map_doc_id)
+    metadata_doc_id = await create_metadata_document(name, "directory", directory_doc_id, inode_map_doc_id, 0)
     # Create the directory document
     await doc.set_bytes(author, b"type", b"directory")
     await doc.set_bytes(author, b"version", b"v0")
@@ -191,12 +197,12 @@ async def create_directory_document(name, inode_map_doc_id):
 
     return directory_doc_id
 
-async def create_file_document(name, blob_hash, inode_map_doc_id):
+async def create_file_document(name, size, blob_hash, inode_map_doc_id):
     print("Creating file document")
     doc = await node.docs().create()
     file_doc_id = doc.id()
     # Create the metadata document and fetch its ID
-    metadata_doc_id = await create_metadata_document(name, "file", file_doc_id, inode_map_doc_id)
+    metadata_doc_id = await create_metadata_document(name, "file", file_doc_id, inode_map_doc_id, size)
     # Create the directory document
     await doc.set_bytes(author, b"type", b"file")
     await doc.set_bytes(author, b"version", b"v0")
@@ -204,7 +210,15 @@ async def create_file_document(name, blob_hash, inode_map_doc_id):
     await doc.set_bytes(author, b"updated", bytes(str(time.time()), "utf-8"))
     await doc.set_bytes(author, b"metadata", bytes(metadata_doc_id, "utf-8"))
     await doc.set_bytes(author, b"blob", bytes(str(blob_hash), "utf-8"))
+    await doc.set_bytes(author, b"size", bytes(str(size), "utf-8"))
     print("Created file document: {}".format(file_doc_id))
+    # Fetch the metadata from the metadata document
+    metadata = await get_metadata(metadata_doc_id)
+    # Grab the inode number from the metadata
+    st_ino = metadata["st_ino"]
+    # Insert the file document ID into the inode map
+    await set_by_key(inode_map_doc_id, bytes(str(metadata["st_ino"]), "utf-8"), bytes(str(file_doc_id), "utf-8"))
+
     # Debug mode: print out the doc we just created
     if debug_mode:
         # Fetch all keys from the document
@@ -212,7 +226,23 @@ async def create_file_document(name, blob_hash, inode_map_doc_id):
 
     return file_doc_id
 
-async def create_root_document(ticket=False):
+async def create_dummy_file_document(name, size, inode_map_doc_id):
+    print("Creating dummy file and document")
+
+    # Generate a random file of the size we want.
+    random_file_contents = ''.join(random.choice(string.ascii_letters + string.digits) for _ in range(size))
+
+    # Upload the file to Iroh
+    add_outcome = await node.blobs().add_bytes(bytes(random_file_contents, "utf-8"))
+    assert add_outcome.format == iroh.BlobFormat.RAW
+    assert add_outcome.size == size
+
+    file_doc_id = await create_file_document(name, size, add_outcome.hash, inode_map_doc_id)
+    # Insert the uploaded blob to the file document
+    await set_by_key(file_doc_id, "blob", bytes(str(file_doc_id), "utf-8"))
+    return file_doc_id
+
+async def create_root_document(ticket=False):# 
     # Find or create a root document for Recurso to use.
     # If we've been given a ticket
     if ticket:
@@ -282,18 +312,34 @@ async def create_new_root_document(doc_id):
     inode_map_doc = await node.docs().open(inode_map_doc_id)
 
     # Fetch the inode number for the root directory's directory document
-    metadata = await get_metadata_for_doc_id(directory_doc_id)
+    metadata = await find_and_fetch_metadata_for_doc_id(directory_doc_id)
     # Set the inode number for the root directory to be equal to the document ID for the root directory's document
     await inode_map_doc.set_bytes(author, bytes(str("01101100011011110111011001100101"), "utf-8"), bytes(str(directory_doc_id), "utf-8"))
     # Set the real inode number to be equal to the document ID for the root directory's document
     await inode_map_doc.set_bytes(author, bytes(str(metadata["st_ino"]), "utf-8"), bytes(str(directory_doc_id), "utf-8"))
+
+    # Create a dummy file, push it into the children list
+    created_file_id = await create_dummy_file_document("example.txt", 1024, inode_map_doc_id)
+    children_doc_id = await get_by_key(directory_doc_id, "children")
+    await set_by_key(children_doc_id, "fsfile-example.txt", bytes(str(created_file_id), "utf-8"))
+    created_file_id = await create_dummy_file_document("example2.txt", 1024, inode_map_doc_id)
+    children_doc_id = await get_by_key(directory_doc_id, "children")
+    await set_by_key(children_doc_id, "fsfile-example2.txt", bytes(str(created_file_id), "utf-8"))
+    created_file_id = await create_dummy_file_document("hello.txt", 1024, inode_map_doc_id)
+    children_doc_id = await get_by_key(directory_doc_id, "children")
+    await set_by_key(children_doc_id, "fsfile-hello.txt", bytes(str(created_file_id), "utf-8"))
+    created_file_id = await create_dummy_file_document("world.txt", 1024, inode_map_doc_id)
+    children_doc_id = await get_by_key(directory_doc_id, "children")
+    await set_by_key(children_doc_id, "fsfile-world.txt", bytes(str(created_file_id), "utf-8"))
 
     # Check that we have a valid inode map document
     assert inode_map_doc_id
 
     return directory_doc_id, inode_map_doc_id
 
-async def get_metadata_for_doc_id(doc_id):
+# Find the metadata document ID within a DirectoryDoc or FileDoc
+# Then use get_metadata to fetch the metadata from within it
+async def find_and_fetch_metadata_for_doc_id(doc_id):
     # Get inode and other directory info from a DirectoryDoc or FileDoc
     doc = await node.docs().open(doc_id)
     # Lookup metadata key
@@ -307,10 +353,6 @@ async def get_metadata_for_doc_id(doc_id):
     if debug_mode:
         print(document_metadata)
     return document_metadata
-
-async def get_document(doc_id):
-    doc = await node.docs().open(doc_id)
-    return doc
 
 async def get_metadata(doc_id):
     # Fetch the metadata document
@@ -336,6 +378,10 @@ async def get_metadata(doc_id):
             metadata[key] = int(value.decode())
 
     return metadata
+
+async def get_document(doc_id):
+    doc = await node.docs().open(doc_id)
+    return doc
 
 async def setup_iroh_node(ticket=False, debug=False):
     global node

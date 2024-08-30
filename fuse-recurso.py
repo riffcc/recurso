@@ -63,7 +63,7 @@ class RecursoFs(pyfuse3.Operations):
             print("Inode type: {}".format(inode_type))
 
         # Lookup the metadata for the inode
-        metadata = await recurso.get_metadata_for_doc_id(inode_doc_id)
+        metadata = await recurso.find_and_fetch_metadata_for_doc_id(inode_doc_id)
 
         # If the inode is a directory, update the size based on the number of children
         if inode_type == "directory":
@@ -84,7 +84,7 @@ class RecursoFs(pyfuse3.Operations):
         entry.st_mtime_ns = recurso.convert_seconds_to_ns(metadata["st_mtime"])
         entry.st_gid = metadata["st_gid"]
         entry.st_uid = metadata["st_uid"]
-        entry.st_ino = inode
+        entry.st_ino = int(inode)
         return entry
 
     async def lookup(self, parent_inode, name, ctx=None):
@@ -109,8 +109,10 @@ class RecursoFs(pyfuse3.Operations):
         children_doc_id = await recurso.get_by_key(parent_inode_doc_id, "children")
         print("Children doc ID: {}".format(children_doc_id))
 
+        # Convert name from bytes to a string
+        name = name.decode("utf8")
+    
         print("Looking for lost child: {}".format(name))
-
 
         # Lookup the key name in the children document
         # Try it as a directory first
@@ -169,7 +171,7 @@ class RecursoFs(pyfuse3.Operations):
         directory_doc_id = await recurso.get_by_key(self.inode_map_doc_id, str(fh))
 
         # Lookup the metadata for the directory
-        metadata = await recurso.get_metadata_for_doc_id(directory_doc_id)
+        metadata = await recurso.find_and_fetch_metadata_for_doc_id(directory_doc_id)
 
         # Lookup the children for the directory which will contain the list of child files and directories
         children_doc_id = await recurso.get_by_key(directory_doc_id, "children")
@@ -203,7 +205,7 @@ class RecursoFs(pyfuse3.Operations):
             # We'll need to grab the document for that inode
             inode_doc_id = content.decode("utf8")
             # Get the metadata for the inode
-            metadata = await recurso.get_metadata_for_doc_id(inode_doc_id)
+            metadata = await recurso.find_and_fetch_metadata_for_doc_id(inode_doc_id)
 
             # Fetch the inode number
             real_inode = metadata["st_ino"]
@@ -225,8 +227,6 @@ class RecursoFs(pyfuse3.Operations):
 
     async def open(self, inode, flags, ctx):
         print("Opening inode: {}".format(inode))
-        if inode != self.hello_inode:
-            raise pyfuse3.FUSEError(errno.ENOENT)
         if flags & os.O_RDWR or flags & os.O_WRONLY:
             raise pyfuse3.FUSEError(errno.EACCES)
         return pyfuse3.FileInfo(fh=inode)
