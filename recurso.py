@@ -318,17 +318,17 @@ async def create_new_root_document(doc_id):
     # Set the real inode number to be equal to the document ID for the root directory's document
     await inode_map_doc.set_bytes(author, bytes(str(metadata["st_ino"]), "utf-8"), bytes(str(directory_doc_id), "utf-8"))
 
-    # Create a dummy file, push it into the children list
-    created_file_id = await create_dummy_file_document("example.txt", 1024, inode_map_doc_id)
+    # Create dummy files, push them into the children list
+    created_file_id = await create_dummy_file_document("example.txt", 5, inode_map_doc_id)
     children_doc_id = await get_by_key(directory_doc_id, "children")
     await set_by_key(children_doc_id, "fsfile-example.txt", bytes(str(created_file_id), "utf-8"))
-    created_file_id = await create_dummy_file_document("example2.txt", 1024, inode_map_doc_id)
+    created_file_id = await create_dummy_file_document("example2.txt", 512, inode_map_doc_id)
     children_doc_id = await get_by_key(directory_doc_id, "children")
     await set_by_key(children_doc_id, "fsfile-example2.txt", bytes(str(created_file_id), "utf-8"))
     created_file_id = await create_dummy_file_document("hello.txt", 1024, inode_map_doc_id)
     children_doc_id = await get_by_key(directory_doc_id, "children")
     await set_by_key(children_doc_id, "fsfile-hello.txt", bytes(str(created_file_id), "utf-8"))
-    created_file_id = await create_dummy_file_document("world.txt", 1024, inode_map_doc_id)
+    created_file_id = await create_dummy_file_document("world.txt", 10240, inode_map_doc_id)
     children_doc_id = await get_by_key(directory_doc_id, "children")
     await set_by_key(children_doc_id, "fsfile-world.txt", bytes(str(created_file_id), "utf-8"))
 
@@ -367,7 +367,7 @@ async def get_metadata(doc_id):
         "st_size": "UNLOADED",  # Initial size (empty directory)
         "st_atime": "UNLOADED", # Time of last access
         "st_mtime": "UNLOADED", # Time of last modification
-        "st_ctime": "UNLOADED"
+        "st_ctime": "UNLOADED"  # Time of creation
     }
 
     # Populate the metadata dictionary with actual values
