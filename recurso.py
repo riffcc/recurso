@@ -482,7 +482,7 @@ async def setup_iroh_node(ticket=False, debug=False):
     # setup event loop, to ensure async callbacks work
     iroh.iroh_ffi.uniffi_set_event_loop(asyncio.get_running_loop())
 
-    print("Starting Recurso Demo")
+    print("Starting Recurso Distributed File System")
 
     # set debug mode based on debug flag
     debug_mode = debug
