@@ -6,6 +6,8 @@ import uuid
 import stat
 import random
 import string
+import decode_ticket
+from blake3 import blake3
 
 # Utility functions
 # These take docs, not doc IDs
@@ -107,39 +109,48 @@ def convert_seconds_to_ns(seconds):
 
 # Main functions
 async def scan_root_document(doc_id):
-    print("Scanning root document")
+    print("Scanning root document {}".format(doc_id))
     doc = await node.docs().open(doc_id)
-    print("Opened root doc for scanning: {}".format(doc_id))
     # Fetch all keys from the root document
     query = iroh.Query.all(None)
     entries = await doc.get_many(query)
-    # Wait until doc is ready
-    print("Entries: {}".format(entries))
-    #print("Keys: {}".format(entries))
-    # Check if we have a type set
-    if "type" in entries:
-        print("Type: {}".format(entries["type"]))
-        # Check if the type is set to "root document"
-        if entries["type"] == "root":
-            print("Root document found")
+    type_is_correct = False
+    for entry in entries:
+        key = entry.key()
+        hash = entry.content_hash()
+        content = await entry.content_bytes(doc)
+        if key == b"type":
+            print("Type: {}".format(content.decode("utf8")))
+            # Check if the type is set to "root document"
+            if content.decode("utf8") == "root":
+                # Mark type as correct so that we can check version
+                type_is_correct = True
+                print("Root document found")
+            # Check if the type is set to anything other than "root document", but exists:
+            else:
+                print("Found a document of type: {}".format(content.decode("utf8")))
+                print("Was expecting a root document. Bailing!")
+                return "err_not_root"
+        if key == b"version":
             # Check version is v0
-            if entries["version"] == "v0":
+            if content.decode("utf8") == "v0":
                 print("Root document is v0")
-                return "state", "ok"
+                if type_is_correct:
+                    return "ok"
+                else:
+                    return "err_not_root"
             else:
                 print("Root document is not v0, bailing!")
-                return "state", "err_not_v0"
-        # Check if the type is set to anything other than "root document", but exists:
-        elif entries["type"] and entries["type"] != "root document":
-            print("Found a document of type: {}".format(entries["type"]))
-            print("Was expecting a root document. Bailing!")
-            return "state", "err_not_root"
+                return "err_not_v0"
     else:
         print("No type set and no odd markers found. Creating as empty rootdoc...")
         print("Dumping all entries")
         for entry in entries:
-            print(entry)
-        return "state", "empty"
+            key = entry.key()
+            hash = entry.content_hash()
+            content = await entry.content_bytes(doc)
+            print("{} : {} (hash: {})".format(key, content.decode("utf8"), hash))
+        return "empty"
 
 async def create_children_document(inode_map_doc_id):
     print("Creating children document")
@@ -291,20 +302,26 @@ async def create_dummy_file_document(name, size, inode_map_doc_id):
     return file_doc_id
 
 async def create_root_document(ticket=False):
+    global node
     # Find or create a root document for Recurso to use.
     # If we've been given a ticket
     if ticket:
+        # We convert the ticket from a string to a DocTicket
+        ticket = iroh.DocTicket(ticket)
         doc = await node.docs().join(ticket)
         doc_id = doc.id()
         print("Joined root doc: {}".format(doc_id))
     else:
         doc = await node.docs().create()
         doc_id = doc.id()
-        print("Created initial root doc: {}".format(doc_id))
-    state, status = await scan_root_document(doc_id)
+        print("Created new (blank) initial root doc: {}".format(doc_id))
+    time.sleep(1)
+    status = await scan_root_document(doc_id)
+    print("Scan status: {}".format(status))
     if status == "ok":
         # Found a root document, return it
         # Scan the document for the directoy and inode map doc IDs
+        print("Loading existing directory and inode map document IDs")
         directory_doc_id = await get_by_key(doc_id, "directory")
         inode_map_doc_id = await get_by_key(doc_id, "inode_map")
         return doc_id, directory_doc_id, inode_map_doc_id
@@ -315,7 +332,8 @@ async def create_root_document(ticket=False):
     elif status == "err_not_root":
         # Found a document of type other than "root document"
         print("Found a document of type other than 'root document'. Bailing!")
-        return "state", "err_not_root"
+        # Error out
+        return None, None, None
 
 async def create_inode_map_document():
     # Create a new inode map document.
@@ -455,8 +473,37 @@ async def setup_iroh_node(ticket=False, debug=False):
     print("Started Iroh node: {}".format(node_id))
 
     # Get and set default author globally
-    author = await node.authors().default()
+    first_author = await node.authors().default()
+    # Set a new author
+    author = await node.authors().import_author(iroh.Author.from_string("3huxdx54bapti2vmbtpfnrkiw2fpxy2ryod6bogns5nwqdy6zjba"))
+    authors = await node.authors().list()
+    assert len(authors) == 2
+
     print(f"Default author: {author}")
+
+async def gossip_loop(ticket):
+    global node
+    global gossip_topic
+    # We're going to keep track of which nodes are connected to our gossip loop
+    connected_nodes = []
+
+    # If we've been given a ticket, grab the node ID and add it to the connected nodes list
+    if ticket:
+        # Decode the ticket's node ID
+        ticket_decoded = decode_ticket.decode_iroh_ticket(ticket)
+        # List the nodes
+        nodes = ticket_decoded.nodes
+        for node in nodes:
+            # Add the ticket's node ID to the connected nodes list
+            connected_nodes.append(node.node_id)
+        # Print out the connected nodes
+        print("Connected nodes: {}".format(connected_nodes))
+    # If we haven't been given a ticket, we're just going to listen for control messages
+    else:
+        print("Listening for control messages")
+
+    while True:
+        await asyncio.sleep(1)
 
 # Classes
 class AddCallback:
@@ -480,7 +527,7 @@ async def main():
     global author
     global debug_mode
     global inode_map_doc_id
-
+    global gossip_topic
     # set initial var states
     debug_mode = False
     ticket = False
@@ -496,7 +543,6 @@ async def main():
         debug_mode = True
     if args.ticket:
         ticket = args.ticket
-        ticket = iroh.DocTicket(ticket)
         print("Loaded ticket")
 
     # Setup iroh node
@@ -507,10 +553,11 @@ async def main():
 
     # Load our root document
     root_doc = await node.docs().open(root_doc_id)
-    # Create a ticket to join the root document
-    ticket = await root_doc.share(iroh.ShareMode.WRITE, iroh.AddrInfoOptions.RELAY)
-    print("To join another node, use this ticket: {}".format(ticket))
-    print("You can use the command: `python3 fuse-recurso.py /mnt/test --ticket {}".format(ticket) + "`")
+    # Create a ticket to join the root document. Use Relay instead of ID if needed.
+    new_ticket = await root_doc.share(iroh.ShareMode.WRITE, iroh.AddrInfoOptions.RELAY)
+    print("To join another node, use this ticket: {}".format(new_ticket))
+    print("You can use the command: `python3 fuse-recurso.py /mnt/test --ticket {}".format(new_ticket) + "`")
+    print("or `python3 recurso.py --ticket {}".format(new_ticket) + "`")
 
     # list docs
     docs = await node.docs().list()
@@ -518,10 +565,16 @@ async def main():
     for doc in docs:
         print("\t{}".format(doc))
 
+    # We'll create a hash of the root doc ID and use it as our gossip topic
+    gossip_topic = blake3(bytes(root_doc_id, "utf-8")).digest()
+
+    # In a background thread, use a gossip loop that listens for control messages
+    asyncio.create_task(gossip_loop(ticket))
+
     # Stay alive until we get a SIGINT
     try:
         while True:
-            time.sleep(1)
+            await asyncio.sleep(1)
     except KeyboardInterrupt:
         print("SIGINT or CTRL-C detected. Exiting...")
     finally:

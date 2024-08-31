@@ -41,7 +41,7 @@ class RecursoFs(pyfuse3.Operations):
         # Load our root document
         root_doc = await recurso.node.docs().open(self.root_doc_id)
         # Create a ticket to join the root document
-        ticket = await root_doc.share(recurso.iroh.ShareMode.WRITE, recurso.iroh.AddrInfoOptions.ID)
+        ticket = await root_doc.share(recurso.iroh.ShareMode.WRITE, recurso.iroh.AddrInfoOptions.RELAY)
         print("To join another node, use this ticket: {}".format(ticket))
         print("You can use the command: `python3 fuse-recurso.py /mnt/test --ticket {}".format(ticket) + "`")
 
