@@ -221,7 +221,7 @@ def decode_iroh_ticket(ticket_string: str):
     decoder = TicketDecoder(ticket_string)
     return decoder.decode()
 
-# # Example usage
+# Example usage
 # ticket = "this-is-not-a-real-ticket"
 # decoded_ticket = decode_iroh_ticket(ticket)
 # print(decoded_ticket)

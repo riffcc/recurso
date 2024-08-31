@@ -481,31 +481,66 @@ async def setup_iroh_node(ticket=False, debug=False):
 
     print(f"Default author: {author}")
 
-async def gossip_loop(ticket):
+async def gossip_loop(ticket, gossip_topic):
     global node
-    global gossip_topic
     # We're going to keep track of which nodes are connected to our gossip loop
-    connected_nodes = []
+    gossip_nodes = []
 
     # If we've been given a ticket, grab the node ID and add it to the connected nodes list
     if ticket:
         # Decode the ticket's node ID
         ticket_decoded = decode_ticket.decode_iroh_ticket(ticket)
         # List the nodes
-        nodes = ticket_decoded.nodes
-        for node in nodes:
-            # Add the ticket's node ID to the connected nodes list
-            connected_nodes.append(node.node_id)
-        # Print out the connected nodes
-        print("Connected nodes: {}".format(connected_nodes))
+        initial_gossip_nodes = ticket_decoded.nodes
+        # Add the NodeAddr objects to the connected nodes list
+        gossip_nodes.extend(initial_gossip_nodes)
+        # Print out the initial nodes we'll connect to
+        print("Initial nodes: {}".format(gossip_nodes))
+        # node_addr = await node.net().node_addr()
+        # print(dir(node_addr))
+        # Join the nodes
+        for gossip_node in gossip_nodes:
+            node_addr = iroh.NodeAddr(node_id=iroh.PublicKey(gossip_node.node_id), relayUrl=(gossip_node.info.derp_url), addresses=gossip_node.info.direct_addresses)
+            print("Adding node: {}".format(node_addr))
+            await node.net().add_node_addr(node_addr)
+        # Subscribe to the gossip topic
+        cb0 = GossipCallback(node.net().node_id())
+        print("Subscribing to gossip topic: {} as node {}".format(gossip_topic, node.net().node_id()))
+        sink0 = await node.gossip().subscribe(gossip_topic, gossip_nodes, cb0)
+
     # If we haven't been given a ticket, we're just going to listen for control messages
     else:
         print("Listening for control messages")
+        cb0 = GossipCallback(node.net().node_id())
+        print("Subscribing to gossip topic: {} as node {}".format(gossip_topic, await node.net().node_id()))
+        sink0 = await node.gossip().subscribe(gossip_topic, [await node.net().node_id()], cb0)
 
     while True:
+        event = await cb0.chan.get()
+        print("<<", event.type())
+        if (event.type() == iroh.MessageType.JOINED):
+            print(">>", event.type())
+             # Broadcact message from whichever nodes did not join
+            print("broadcasting message")
+            msg_content = bytearray("hello".encode("utf-8"))
+
+            await sink0.broadcast(msg_content)
         await asyncio.sleep(1)
 
 # Classes
+
+# GossipMessage
+class GossipCallback(iroh.GossipMessageCallback):
+    def __init__(self, name):
+        print("init", name)
+        self.name = name
+        self.chan = asyncio.Queue()
+
+    async def on_message(self, msg):
+        print(self.name, msg.type())
+        await self.chan.put(msg)
+
+# Add callback for when we get a hash back from iroh
 class AddCallback:
     hash = None
     format = None
@@ -554,7 +589,7 @@ async def main():
     # Load our root document
     root_doc = await node.docs().open(root_doc_id)
     # Create a ticket to join the root document. Use Relay instead of ID if needed.
-    new_ticket = await root_doc.share(iroh.ShareMode.WRITE, iroh.AddrInfoOptions.RELAY)
+    new_ticket = await root_doc.share(iroh.ShareMode.WRITE, iroh.AddrInfoOptions.RELAY_AND_ADDRESSES)
     print("To join another node, use this ticket: {}".format(new_ticket))
     print("You can use the command: `python3 fuse-recurso.py /mnt/test --ticket {}".format(new_ticket) + "`")
     print("or `python3 recurso.py --ticket {}".format(new_ticket) + "`")
@@ -569,7 +604,7 @@ async def main():
     gossip_topic = blake3(bytes(root_doc_id, "utf-8")).digest()
 
     # In a background thread, use a gossip loop that listens for control messages
-    asyncio.create_task(gossip_loop(ticket))
+    asyncio.create_task(gossip_loop(ticket, gossip_topic))
 
     # Stay alive until we get a SIGINT
     try:
