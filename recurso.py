@@ -7,6 +7,7 @@ import stat
 import random
 import string
 import decode_ticket
+import json
 from blake3 import blake3
 
 # Utility functions
@@ -312,10 +313,13 @@ async def create_root_document(ticket=False):
         doc_id = doc.id()
         print("Joined root doc: {}".format(doc_id))
     else:
+        # Get a ticket for the 
         doc = await node.docs().create()
         doc_id = doc.id()
         print("Created new (blank) initial root doc: {}".format(doc_id))
+    # Without this sleep, sync issues occur
     time.sleep(1)
+    ticket_doc_id = await create_ticket_document()
     status = await scan_root_document(doc_id)
     print("Scan status: {}".format(status))
     if status == "ok":
@@ -324,16 +328,32 @@ async def create_root_document(ticket=False):
         print("Loading existing directory and inode map document IDs")
         directory_doc_id = await get_by_key(doc_id, "directory")
         inode_map_doc_id = await get_by_key(doc_id, "inode_map")
-        return doc_id, directory_doc_id, inode_map_doc_id
+        return doc_id, directory_doc_id, inode_map_doc_id, ticket_doc_id
     elif status == "empty":
         # No root document found, create a new one and fetch the result
         directory_doc_id, inode_map_doc_id = await create_new_root_document(doc_id)
-        return doc_id, directory_doc_id, inode_map_doc_id
+        return doc_id, directory_doc_id, inode_map_doc_id, ticket_doc_id
     elif status == "err_not_root":
         # Found a document of type other than "root document"
         print("Found a document of type other than 'root document'. Bailing!")
         # Error out
         return None, None, None
+
+async def create_ticket_document():
+    print("Creating node inode document")
+    doc = await node.docs().create()
+    ticket_doc_id = doc.id()
+    node_id = await node.net().node_id()
+    print("Created node inode document: {}".format(ticket_doc_id))
+
+    # Set the type, version, created, updated, and inode_map keys
+    await doc.set_bytes(author, b"type", b"active_node_inodes")
+    await doc.set_bytes(author, b"version", b"v0")
+    await doc.set_bytes(author, b"node_id", bytes(str(node_id), "utf-8"))
+    await doc.set_bytes(author, b"created", bytes(str(time.time()), "utf-8"))
+    await doc.set_bytes(author, b"updated", bytes(str(time.time()), "utf-8"))
+
+    return ticket_doc_id
 
 async def create_inode_map_document():
     # Create a new inode map document.
@@ -500,13 +520,21 @@ async def gossip_loop(ticket, gossip_topic):
         # print(dir(node_addr))
         # Join the nodes
         for gossip_node in gossip_nodes:
-            node_addr = iroh.NodeAddr(node_id=iroh.PublicKey(gossip_node.node_id), relayUrl=(gossip_node.info.derp_url), addresses=gossip_node.info.direct_addresses)
-            print("Adding node: {}".format(node_addr))
+            public_key = iroh.PublicKey.from_string(gossip_node.node_id)
+            derp_url = gossip_node.info.derp_url
+            addresses = gossip_node.info.direct_addresses
+            node_addr = iroh.NodeAddr(
+                node_id=public_key,
+                derp_url=derp_url,  # This is optional, you can pass None if not needed
+                addresses=addresses
+            )
             await node.net().add_node_addr(node_addr)
+            print("Node added")
         # Subscribe to the gossip topic
-        cb0 = GossipCallback(node.net().node_id())
-        print("Subscribing to gossip topic: {} as node {}".format(gossip_topic, node.net().node_id()))
-        sink0 = await node.gossip().subscribe(gossip_topic, gossip_nodes, cb0)
+        my_node_id = await node.net().node_id()
+        cb0 = GossipCallback(my_node_id)
+        print("Subscribing to gossip topic: {} as node {}".format(gossip_topic, my_node_id))
+        sink0 = await node.gossip().subscribe(gossip_topic, [gossip_node.node_id], cb0)
 
     # If we haven't been given a ticket, we're just going to listen for control messages
     else:
@@ -520,11 +548,34 @@ async def gossip_loop(ticket, gossip_topic):
         print("<<", event.type())
         if (event.type() == iroh.MessageType.JOINED):
             print(">>", event.type())
-             # Broadcact message from whichever nodes did not join
-            print("broadcasting message")
-            msg_content = bytearray("hello".encode("utf-8"))
+             # Broadcast message from whichever nodes did not join
+            msg_content = '{{"msg": "Hello, join me!", "node_id": "{}", "join_ticket": "{}"}}'.format(
+                await node.net().node_id(), read_only_ticket
+            )
+            msg_content = bytearray(msg_content.encode("utf-8"))
 
             await sink0.broadcast(msg_content)
+        elif (event.type() == iroh.MessageType.RECEIVED):
+            # We received a message, let's read it
+            message = event.as_received().content.decode("utf-8")
+            # Load the message as a JSON object
+            message = json.loads(message)
+            # If message is a join offer
+            if message["msg"] == "Hello, join me!": 
+                # Notify the user that a node gave us an offer to join
+                print("Node {} asked us to sync from them.".format(message["node_id"]))
+                # Grab the join ticket from the message
+                join_ticket = message["join_ticket"]
+                # Load the join ticket
+                print("Attempting to join Node {}".format(message["node_id"]))
+                try:    
+                    join_ticket = iroh.DocTicket(join_ticket)
+                    # Join the document
+                    doc = await node.docs().join(join_ticket)
+                    # Print out the document ID
+                    print("Joined node document: {}".format(doc.id()))
+                except Exception as e:
+                    print("Failed to join node document: {}".format(e))
         await asyncio.sleep(1)
 
 # Classes
@@ -563,6 +614,7 @@ async def main():
     global debug_mode
     global inode_map_doc_id
     global gossip_topic
+    global read_only_ticket
     # set initial var states
     debug_mode = False
     ticket = False
@@ -584,12 +636,16 @@ async def main():
     await setup_iroh_node(ticket, debug_mode)
 
     # create or find root document
-    root_doc_id, root_directory_doc_id, inode_map_doc_id = await create_root_document(ticket=ticket)
+    root_doc_id, root_directory_doc_id, inode_map_doc_id, ticket_doc_id = await create_root_document(ticket=ticket)
 
     # Load our root document
     root_doc = await node.docs().open(root_doc_id)
     # Create a ticket to join the root document. Use Relay instead of ID if needed.
     new_ticket = await root_doc.share(iroh.ShareMode.WRITE, iroh.AddrInfoOptions.RELAY_AND_ADDRESSES)
+    # Load our tickets list
+    tickets_doc = await node.docs().open(ticket_doc_id)
+    # Create a read only ticket to join our tickets list
+    read_only_ticket = await tickets_doc.share(iroh.ShareMode.READ, iroh.AddrInfoOptions.RELAY_AND_ADDRESSES)
     print("To join another node, use this ticket: {}".format(new_ticket))
     print("You can use the command: `python3 fuse-recurso.py /mnt/test --ticket {}".format(new_ticket) + "`")
     print("or `python3 recurso.py --ticket {}".format(new_ticket) + "`")
