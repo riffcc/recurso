@@ -8,6 +8,7 @@ import random
 import string
 import decode_ticket
 import json
+import queue
 from blake3 import blake3
 
 # Utility functions
@@ -230,16 +231,16 @@ async def create_metadata_document(name, type, doc_id, inode_map_doc_id, size):
     if debug_mode:
         # Fetch all keys from the document
         await print_all_keys(doc)
-    return metadata_doc_id
+    return metadata_doc_id, st_ino
 
-async def create_directory_document(name, inode_map_doc_id):
+async def create_directory_document(name, inode_map_doc_id, ticket_doc_id):
     print("Creating directory document")
     doc = await node.docs().create()
     directory_doc_id = doc.id()
     # Create the children document and fetch its ID
     children_doc_id = await create_children_document(inode_map_doc_id)
     # Create the metadata document and fetch its ID
-    metadata_doc_id = await create_metadata_document(name, "directory", directory_doc_id, inode_map_doc_id, 0)
+    metadata_doc_id, st_ino = await create_metadata_document(name, "directory", directory_doc_id, inode_map_doc_id, 0)
     # Create the directory document
     await doc.set_bytes(author, b"type", b"directory")
     await doc.set_bytes(author, b"version", b"v0")
@@ -248,6 +249,20 @@ async def create_directory_document(name, inode_map_doc_id):
     await doc.set_bytes(author, b"metadata", bytes(metadata_doc_id, "utf-8"))
     await doc.set_bytes(author, b"children", bytes(children_doc_id, "utf-8"))
     print("Created directory document: {}".format(directory_doc_id))
+    # Create a ticket to join the directory document
+    writable_ticket = await doc.share(iroh.ShareMode.WRITE, iroh.AddrInfoOptions.RELAY_AND_ADDRESSES)
+    print("Created writable ticket: {}".format(writable_ticket))
+    # Add that ticket to the tickets document
+    tickets_doc = await node.docs().open(ticket_doc_id)
+    await tickets_doc.set_bytes(author, bytes('inode_' + str(st_ino) + '-', "utf-8"), bytes(str(writable_ticket), "utf-8"))
+    # Create a ticket to join the metadata document
+    metadata_doc = await node.docs().open(metadata_doc_id)
+    writable_ticket_metadata = await metadata_doc.share(iroh.ShareMode.WRITE, iroh.AddrInfoOptions.RELAY_AND_ADDRESSES)
+    await tickets_doc.set_bytes(author, bytes('inode_' + str(st_ino) + '_metadata', "utf-8"), bytes(str(writable_ticket_metadata), "utf-8"))
+    # Create a ticket to join the children document
+    children_doc = await node.docs().open(children_doc_id)
+    writable_ticket_children = await children_doc.share(iroh.ShareMode.WRITE, iroh.AddrInfoOptions.RELAY_AND_ADDRESSES)
+    await tickets_doc.set_bytes(author, bytes('inode_' + str(st_ino) + '_children', "utf-8"), bytes(str(writable_ticket_children), "utf-8"))
     # Debug mode: print out the doc we just created
     if debug_mode:
         # Fetch all keys from the document
@@ -255,27 +270,43 @@ async def create_directory_document(name, inode_map_doc_id):
 
     return directory_doc_id
 
-async def create_file_document(name, size, blob_hash, inode_map_doc_id):
+async def create_file_document(name, size, blob_hash, inode_map_doc_id, ticket_doc_id):
     print("Creating file document")
     doc = await node.docs().create()
     file_doc_id = doc.id()
     # Create the metadata document and fetch its ID
-    metadata_doc_id = await create_metadata_document(name, "file", file_doc_id, inode_map_doc_id, size)
-    # Create the directory document
+    metadata_doc_id, st_ino = await create_metadata_document(name, "file", file_doc_id, inode_map_doc_id, size)
+    # Create the file document
     await doc.set_bytes(author, b"type", b"file")
     await doc.set_bytes(author, b"version", b"v0")
     await doc.set_bytes(author, b"created", bytes(str(time.time()), "utf-8"))
     await doc.set_bytes(author, b"updated", bytes(str(time.time()), "utf-8"))
-    await doc.set_bytes(author, b"metadata", bytes(metadata_doc_id, "utf-8"))
+    await doc.set_bytes(author, b"metadata", bytes(str(metadata_doc_id), "utf-8"))
     await doc.set_bytes(author, b"blob", bytes(str(blob_hash), "utf-8"))
     await doc.set_bytes(author, b"size", bytes(str(size), "utf-8"))
     print("Created file document: {}".format(file_doc_id))
-    # Fetch the metadata from the metadata document
-    metadata = await get_metadata(metadata_doc_id)
-    # Grab the inode number from the metadata
-    st_ino = metadata["st_ino"]
+
+    # Create a ticket to join the file document
+    writable_ticket = await doc.share(iroh.ShareMode.WRITE, iroh.AddrInfoOptions.RELAY_AND_ADDRESSES)
+    print("Created writable ticket: {}".format(writable_ticket))
+    # Add that ticket to the tickets document
+    tickets_doc = await node.docs().open(ticket_doc_id)
+    await tickets_doc.set_bytes(author, bytes('inode_' + str(st_ino) + '-', "utf-8"), bytes(str(writable_ticket), "utf-8"))
+    # Create a ticket to join the metadata document
+    metadata_doc = await node.docs().open(metadata_doc_id)
+    writable_ticket_metadata = await metadata_doc.share(iroh.ShareMode.WRITE, iroh.AddrInfoOptions.RELAY_AND_ADDRESSES)
+    await tickets_doc.set_bytes(author, bytes('inode_' + str(st_ino) + '_metadata', "utf-8"), bytes(str(writable_ticket_metadata), "utf-8"))
+    # Create a ticket to sync the blob
+    hash = iroh.Hash.from_string(str(blob_hash))    
+    blob_format = iroh.BlobFormat.RAW
+    ticket = await node.blobs().share(hash, blob_format, iroh.AddrInfoOptions.RELAY_AND_ADDRESSES)
+    print("Created blob ticket: {}".format(ticket))
+    # Add that ticket to the tickets document
+    tickets_doc = await node.docs().open(ticket_doc_id)
+    await tickets_doc.set_bytes(author, bytes('inode_' + str(st_ino) + '_blob', "utf-8"), bytes(str(ticket), "utf-8"))
+
     # Insert the file document ID into the inode map
-    await set_by_key(inode_map_doc_id, bytes(str(metadata["st_ino"]), "utf-8"), bytes(str(file_doc_id), "utf-8"))
+    await set_by_key(inode_map_doc_id, bytes(str(st_ino), "utf-8"), bytes(str(file_doc_id), "utf-8"))
 
     # Debug mode: print out the doc we just created
     if debug_mode:
@@ -284,7 +315,7 @@ async def create_file_document(name, size, blob_hash, inode_map_doc_id):
 
     return file_doc_id
 
-async def create_dummy_file_document(name, size, inode_map_doc_id):
+async def create_dummy_file_document(name, size, inode_map_doc_id, ticket_doc_id):
     print("Creating dummy file and document")
 
     # Generate a random file of the size we want.
@@ -297,7 +328,7 @@ async def create_dummy_file_document(name, size, inode_map_doc_id):
 
     print("add_outcome.hash: {}".format(add_outcome.hash))
 
-    file_doc_id = await create_file_document(name, size, add_outcome.hash, inode_map_doc_id)
+    file_doc_id = await create_file_document(name, size, add_outcome.hash, inode_map_doc_id, ticket_doc_id)
     # Insert the uploaded blob to the file document
     await set_by_key(file_doc_id, "blob", bytes(str(add_outcome.hash), "utf-8"))
     return file_doc_id
@@ -331,13 +362,13 @@ async def create_root_document(ticket=False):
         return doc_id, directory_doc_id, inode_map_doc_id, ticket_doc_id
     elif status == "empty":
         # No root document found, create a new one and fetch the result
-        directory_doc_id, inode_map_doc_id = await create_new_root_document(doc_id)
+        directory_doc_id, inode_map_doc_id = await create_new_root_document(doc_id, ticket_doc_id)
         return doc_id, directory_doc_id, inode_map_doc_id, ticket_doc_id
     elif status == "err_not_root":
         # Found a document of type other than "root document"
         print("Found a document of type other than 'root document'. Bailing!")
         # Error out
-        return None, None, None
+        return None, None, None, None
 
 async def create_ticket_document():
     print("Creating node inode document")
@@ -376,15 +407,21 @@ async def create_inode_map_document():
         await print_all_keys(doc)
     return inode_map_doc_id
 
-async def create_new_root_document(doc_id):
+async def create_new_root_document(doc_id, ticket_doc_id):
     print("Creating new root document in: {}".format(doc_id))
     doc = await node.docs().open(doc_id)
 
+    # Load the ticket map
     # Create the inode map document and fetch its ID
     inode_map_doc_id = await create_inode_map_document()
+    # Create a ticket to join the inode map document
+    writable_ticket = await doc.share(iroh.ShareMode.WRITE, iroh.AddrInfoOptions.RELAY_AND_ADDRESSES)
+    print("Created writable ticket for the inode map: {}".format(writable_ticket))
+    # Add the inode map ticket to the ticket map
+    await set_by_key(ticket_doc_id, bytes(str("01101100011011110111011001100101"), "utf-8"), bytes(str(writable_ticket), "utf-8"))
 
     # Create the directory document and fetch its ID
-    directory_doc_id = await create_directory_document("RECURSO_ROOT_DIRECTORY", inode_map_doc_id)
+    directory_doc_id = await create_directory_document("RECURSO_ROOT_DIRECTORY", inode_map_doc_id, ticket_doc_id)
 
     # Create the root document
     await doc.set_bytes(author, b"type", b"root")
@@ -407,13 +444,13 @@ async def create_new_root_document(doc_id):
 
     # Create dummy files, push them into the children list
     children_doc_id = await get_by_key(directory_doc_id, "children")
-    created_file_id = await create_dummy_file_document("example.txt", 5, inode_map_doc_id)
+    created_file_id = await create_dummy_file_document("example.txt", 5, inode_map_doc_id, ticket_doc_id)
     await set_by_key(children_doc_id, await encode_filename("example.txt", "file"), bytes(str(created_file_id), "utf-8"))
-    created_file_id = await create_dummy_file_document("example2.txt", 512, inode_map_doc_id)
+    created_file_id = await create_dummy_file_document("example2.txt", 512, inode_map_doc_id, ticket_doc_id)
     await set_by_key(children_doc_id, await encode_filename("example2.txt", "file"), bytes(str(created_file_id), "utf-8"))
-    created_file_id = await create_dummy_file_document("hello.txt", 1024, inode_map_doc_id)
+    created_file_id = await create_dummy_file_document("hello.txt", 1024, inode_map_doc_id, ticket_doc_id)
     await set_by_key(children_doc_id, await encode_filename("hello.txt", "file"), bytes(str(created_file_id), "utf-8"))
-    created_file_id = await create_dummy_file_document("world.txt", 10240, inode_map_doc_id)
+    created_file_id = await create_dummy_file_document("world.txt", 10240, inode_map_doc_id, ticket_doc_id)
     await set_by_key(children_doc_id, await encode_filename("world.txt", "file"), bytes(str(created_file_id), "utf-8"))
 
     # Check that we have a valid inode map document
@@ -516,9 +553,7 @@ async def gossip_loop(ticket, gossip_topic):
         gossip_nodes.extend(initial_gossip_nodes)
         # Print out the initial nodes we'll connect to
         print("Initial nodes: {}".format(gossip_nodes))
-        # node_addr = await node.net().node_addr()
-        # print(dir(node_addr))
-        # Join the nodes
+
         for gossip_node in gossip_nodes:
             public_key = iroh.PublicKey.from_string(gossip_node.node_id)
             derp_url = gossip_node.info.derp_url
@@ -561,23 +596,76 @@ async def gossip_loop(ticket, gossip_topic):
             # Load the message as a JSON object
             message = json.loads(message)
             # If message is a join offer
+            print(message)
             if message["msg"] == "Hello, join me!": 
                 # Notify the user that a node gave us an offer to join
                 print("Node {} asked us to sync from them.".format(message["node_id"]))
-                # Grab the join ticket from the message
-                join_ticket = message["join_ticket"]
-                # Load the join ticket
-                print("Attempting to join Node {}".format(message["node_id"]))
-                try:    
-                    join_ticket = iroh.DocTicket(join_ticket)
-                    # Join the document
-                    doc = await node.docs().join(join_ticket)
-                    # Print out the document ID
-                    print("Joined node document: {}".format(doc.id()))
-                except Exception as e:
-                    print("Failed to join node document: {}".format(e))
+                asyncio.create_task(sync_from_node(node, message["join_ticket"]))
         await asyncio.sleep(1)
 
+async def watch_document(node, doc, event_queue, tickets_doc):
+    while True:
+        try:
+            update = await event_queue.get()
+            await process_document_update(node, doc, update, tickets_doc)
+        except asyncio.CancelledError:
+            # Handle cancellation if needed
+            break
+        except Exception as e:
+            print(f"Error processing update: {e}")
+            # Optionally, add a small delay before continuing
+            await asyncio.sleep(0.1)
+
+async def process_document_update(node, doc, update, tickets_doc):
+    if update.type() == iroh.WatchEventType.INSERT:
+        content = await update.content_bytes(doc)
+        print(content)
+        print(update.key())
+        if update.key() == b"join_ticket":
+            new_ticket = content.decode()
+            new_doc, event_queue = await join_and_watch_document(node, iroh.DocTicket(new_ticket))
+            if event_queue:
+                asyncio.create_task(watch_document(node, new_doc, event_queue, tickets_doc))
+
+async def sync_from_node(node, read_only_ticket):
+    remote_tickets_doc, event_queue = await join_and_watch_document(node, read_only_ticket)
+    if remote_tickets_doc:
+        print("triggered")
+        # Load everything once
+        await asyncio.sleep(1)
+        first_tickets = await get_all_keys_by_prefix(remote_tickets_doc, "inode_")
+        # Get the tickets from each and load them
+        for ticket in first_tickets:
+            # Load the ticket
+            ticket_data = await ticket.content_bytes(remote_tickets_doc)
+            # Sync the ticket
+            new_doc, event_queue = await join_and_watch_document(node, ticket_data)
+            if new_doc:
+                asyncio.create_task(watch_document(node, new_doc, event_queue, new_doc.id()))
+
+        while True:
+            update = await event_queue.get()
+            print(update)
+            if update.type() == iroh.WatchEventType.INSERT:
+                print("TRIGGERED")
+                content = await update.content_bytes(remote_tickets_doc)
+                new_ticket = content.decode()
+                new_doc, event_queue = await join_and_watch_document(node, new_ticket)
+                if new_doc:
+                    asyncio.create_task(watch_document(node, new_doc, event_queue, new_doc.id()))
+
+async def join_and_watch_document(node, ticket):
+    try:
+        event_queue = queue.Queue()
+        # Convert the ticket from a string to a DocTicket
+        ticket = iroh.DocTicket(ticket)
+        doc = await node.docs().join(ticket)
+        callback = DocWatch(event_queue)
+        await doc.subscribe(callback)
+        return doc, event_queue
+    except Exception as e:
+        print(f"Failed to join document: {e}")
+        return None, None
 # Classes
 
 # GossipMessage
@@ -607,6 +695,38 @@ class AddCallback:
         if progress_event.type() == iroh.AddProgressType.ABORT:
             abort_event = progress_event.as_abort()
             raise Exception(abort_event.error)
+
+class DocWatch:
+    def __init__(self, queue):
+        self.queue = queue
+
+    async def event(self, e):
+        t = e.type()
+        if t == iroh.LiveEventType.INSERT_LOCAL:
+            entry = e.as_insert_local()
+            print(f"LiveEvent - InsertLocal: entry hash {entry.content_hash()}")
+            self.queue.put(True)
+        elif t == iroh.LiveEventType.INSERT_REMOTE:
+            insert_remove_event = e.as_insert_remote()
+            print(f"LiveEvent - InsertRemote:\n\tentry hash:\n\t{insert_remove_event.entry.content_hash()}\n\tcontent_status: {insert_remove_event.content_status}")
+            print("Insert Remove events will be eventually followed by the ContentReady event")
+        elif t == iroh.LiveEventType.CONTENT_READY:
+            hash_val = e.as_content_ready()
+            print(f"LiveEvent - ContentReady: hash {hash_val}")
+        elif t == iroh.LiveEventType.NEIGHBOR_UP:
+            node_id = e.as_neighbor_up()
+            print(f"LiveEvent - NeighborUp: node id {node_id}")
+        elif t == iroh.LiveEventType.NEIGHBOR_DOWN:
+            node_id = e.as_neighbor_down()
+            print(f"LiveEvent - NeighborDown: node id {node_id}")
+        elif t == iroh.LiveEventType.SYNC_FINISHED:
+            sync_event = e.as_sync_finished()
+            print(f"Live Event - SyncFinished: synced peer: {sync_event.peer}")
+        elif t == iroh.LiveEventType.PENDING_CONTENT_READY:
+            node_id = e.as_content_ready()
+            print(f"Live Event - PendingContentReady: {node_id}")
+        else:
+            print("Event type was: {}".format(t))
 
 async def main():
     global node
