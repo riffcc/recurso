@@ -9,6 +9,7 @@ import string
 import decode_ticket
 import json
 import queue
+import base64
 from blake3 import blake3
 
 # Utility functions
@@ -548,7 +549,9 @@ async def gossip_loop(ticket, gossip_topic):
         # Add the NodeAddr objects to the connected nodes list
         gossip_nodes.extend(initial_gossip_nodes)
         # Print out the initial nodes we'll connect to
-        print("Initial nodes: {}".format(gossip_nodes))
+        print("Nodes to connect to: {}".format(
+            [gossip_node.node_id for gossip_node in gossip_nodes]
+        ))
 
         for gossip_node in gossip_nodes:
             public_key = iroh.PublicKey.from_string(gossip_node.node_id)
@@ -560,7 +563,7 @@ async def gossip_loop(ticket, gossip_topic):
                 addresses=addresses
             )
             await node.net().add_node_addr(node_addr)
-            print("Node added")
+            print("We connected to node {}".format(gossip_node.node_id))
         # Subscribe to the gossip topic
         my_node_id = await node.net().node_id()
         cb0 = GossipCallback(my_node_id)
@@ -571,14 +574,18 @@ async def gossip_loop(ticket, gossip_topic):
     else:
         print("Listening for control messages")
         cb0 = GossipCallback(node.net().node_id())
-        print("Subscribing to gossip topic: {} as node {}".format(gossip_topic, await node.net().node_id()))
+        # Convert gossip topic to base64 so that we can display it
+        translated_gossip_topic = base64.b64encode(gossip_topic)
+        print("Subscribing to gossip topic: {} as node {}".format(translated_gossip_topic, await node.net().node_id()))
         sink0 = await node.gossip().subscribe(gossip_topic, [await node.net().node_id()], cb0)
 
     while True:
         event = await cb0.chan.get()
-        print("<<", event.type())
+        if debug_mode:
+            print("<<", event.type())
         if (event.type() == iroh.MessageType.JOINED):
-            print(">>", event.type())
+            if debug_mode:
+                print(">>", event.type())
              # Broadcast message from whichever nodes did not join
             msg_content = '{{"msg": "Hello, join me!", "node_id": "{}", "join_ticket": "{}"}}'.format(
                 await node.net().node_id(), read_only_ticket
@@ -591,17 +598,16 @@ async def gossip_loop(ticket, gossip_topic):
             message = event.as_received().content.decode("utf-8")
             # Load the message as a JSON object
             message = json.loads(message)
-            # If message is a join offer
-            print(message)
             if message["msg"] == "Hello, join me!": 
                 # Notify the user that a node gave us an offer to join
-                print("Node {} asked us to sync from them.".format(message["node_id"]))
+                print("Node {} joined and asked us to sync from them.".format(message["node_id"]))
                 asyncio.create_task(sync_from_node(node, message["join_ticket"]))
         await asyncio.sleep(1)
 
 async def watch_document(node, doc, event_queue, tickets_doc):
     while True:
         try:
+            print("Watching document")
             update = await event_queue.get()
             print("Update: {}".format(update))
             await process_document_update(node, doc, update, tickets_doc)
@@ -626,7 +632,8 @@ async def process_document_update(node, doc, update, tickets_doc):
 
 async def sync_from_node(node, read_only_ticket):
     remote_tickets_doc, event_queue = await join_and_watch_document(node, read_only_ticket)
-    print("Syncing {}".format(read_only_ticket) + " from {}".format(node))
+    remote_node_id = decode_ticket.decode_iroh_ticket(read_only_ticket).nodes[0].node_id
+    print("Syncing {}".format(read_only_ticket) + " from node: {}".format(remote_node_id))
     await asyncio.sleep(1)
     if remote_tickets_doc:
         # Load everything once
@@ -655,7 +662,7 @@ async def sync_from_node(node, read_only_ticket):
                 # Sync the ticket
                 print("Syncing document ticket")
                 new_doc, event_queue = await join_and_watch_document(node, ticket_data)
-                #asyncio.create_task(watch_document(node, new_doc, event_queue, new_doc.id()))
+                asyncio.create_task(watch_document(node, new_doc, event_queue, new_doc.id()))
             else:
                 # This should never fire.
                 print("Unknown ticket type")
@@ -695,7 +702,8 @@ class GossipCallback(iroh.GossipMessageCallback):
         self.chan = asyncio.Queue()
 
     async def on_message(self, msg):
-        print(self.name, msg.type())
+        if debug_mode:
+            print(self.name, msg.type())
         await self.chan.put(msg)
 
 # Add callback for when we get a hash back from iroh
@@ -794,14 +802,8 @@ async def main():
     # Create a read only ticket to join our tickets list
     read_only_ticket = await tickets_doc.share(iroh.ShareMode.READ, iroh.AddrInfoOptions.RELAY_AND_ADDRESSES)
     print("To join another node, use this ticket: {}".format(new_ticket))
-    print("You can use the command: `python3 fuse-recurso.py /mnt/test --ticket {}".format(new_ticket) + "`")
-    print("or `python3 recurso.py --ticket {}".format(new_ticket) + "`")
-
-    # list docs
-    docs = await node.docs().list()
-    print("List all {} docs:".format(len(docs)))
-    for doc in docs:
-        print("\t{}".format(doc))
+    print("You can use this command: \n")
+    print("python3 recurso.py --ticket {}".format(new_ticket) + "\n")
 
     # We'll create a hash of the root doc ID and use it as our gossip topic
     gossip_topic = blake3(bytes(root_doc_id, "utf-8")).digest()
