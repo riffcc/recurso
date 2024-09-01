@@ -19,7 +19,7 @@ async def get_all_keys(doc):
     return entries
 
 async def get_all_keys_by_prefix(doc, prefix):
-    query = iroh.Query.key_prefix(bytes(prefix, "utf-8"), None)
+    query = iroh.Query.key_prefix(bytes(str(prefix), "utf-8"), None)
     entries = await doc.get_many(query)
     return entries
 
@@ -536,7 +536,8 @@ async def setup_iroh_node(ticket=False, debug=False):
     authors = await node.authors().list()
     assert len(authors) == 2
 
-    print(f"Default author: {author}")
+    if debug_mode:
+        print(f"Default author: {author}")
 
 async def gossip_loop(ticket, gossip_topic):
     global node
@@ -607,6 +608,7 @@ async def watch_document(node, doc, event_queue, tickets_doc):
     while True:
         try:
             update = await event_queue.get()
+            print("Update: {}".format(update))
             await process_document_update(node, doc, update, tickets_doc)
         except asyncio.CancelledError:
             # Handle cancellation if needed
@@ -619,8 +621,8 @@ async def watch_document(node, doc, event_queue, tickets_doc):
 async def process_document_update(node, doc, update, tickets_doc):
     if update.type() == iroh.WatchEventType.INSERT:
         content = await update.content_bytes(doc)
-        print(content)
         print(update.key())
+        print("TRIGGERED")
         if update.key() == b"join_ticket":
             new_ticket = content.decode()
             new_doc, event_queue = await join_and_watch_document(node, iroh.DocTicket(new_ticket))
@@ -629,19 +631,39 @@ async def process_document_update(node, doc, update, tickets_doc):
 
 async def sync_from_node(node, read_only_ticket):
     remote_tickets_doc, event_queue = await join_and_watch_document(node, read_only_ticket)
+    print("Syncing {}".format(read_only_ticket) + " from {}".format(node))
+    await asyncio.sleep(1)
     if remote_tickets_doc:
-        print("triggered")
         # Load everything once
-        await asyncio.sleep(1)
         first_tickets = await get_all_keys_by_prefix(remote_tickets_doc, "inode_")
-        # Get the tickets from each and load them
-        for ticket in first_tickets:
+        # Iterate over children, respecting the start_id
+        for i, entry in enumerate(first_tickets):
+            # Print the key
             # Load the ticket
-            ticket_data = await ticket.content_bytes(remote_tickets_doc)
-            # Sync the ticket
-            new_doc, event_queue = await join_and_watch_document(node, ticket_data)
-            if new_doc:
-                asyncio.create_task(watch_document(node, new_doc, event_queue, new_doc.id()))
+            ticket_data = await entry.content_bytes(remote_tickets_doc)
+            ticket_data = ticket_data.decode()
+            print("iteration: {}".format(i))
+            # If the ticket is for a blob, join it and watch it
+            if b"_blob" in entry.key():
+                print("Syncing blob ticket")
+                decoded_ticket = decode_ticket.decode_iroh_ticket(ticket_data)
+                # We should consider downloading the blob here
+                always_download_blobs = True
+                if always_download_blobs:
+                    cb = AddCallback()
+                    nodeaddr = iroh.NodeAddr(iroh.PublicKey.from_string(decoded_ticket.node.node_id), decoded_ticket.node.info.derp_url, decoded_ticket.node.info.direct_addresses)
+                    hash = iroh.Hash.from_string(decoded_ticket.hash)
+                    opts = iroh.BlobDownloadOptions(iroh.BlobFormat.RAW, [nodeaddr], iroh.SetTagOption.auto())
+                    blob = await node.blobs().download(hash, opts, cb)
+            elif b"inode_" in entry.key():
+                # It's a document.
+                # Sync the ticket
+                print("Syncing document ticket")
+                new_doc, event_queue = await join_and_watch_document(node, ticket_data)
+                #asyncio.create_task(watch_document(node, new_doc, event_queue, new_doc.id()))
+            else:
+                # This should never fire.
+                print("Unknown ticket type")
 
         while True:
             update = await event_queue.get()
@@ -657,7 +679,7 @@ async def sync_from_node(node, read_only_ticket):
 async def join_and_watch_document(node, ticket):
     try:
         event_queue = queue.Queue()
-        # Convert the ticket from a string to a DocTicket
+        # Convert the ticket to a DocTicket
         ticket = iroh.DocTicket(ticket)
         doc = await node.docs().join(ticket)
         callback = DocWatch(event_queue)
@@ -671,7 +693,9 @@ async def join_and_watch_document(node, ticket):
 # GossipMessage
 class GossipCallback(iroh.GossipMessageCallback):
     def __init__(self, name):
-        print("init", name)
+        # Initialisation
+        if debug_mode:
+            print("init", name)
         self.name = name
         self.chan = asyncio.Queue()
 
@@ -685,12 +709,14 @@ class AddCallback:
     format = None
 
     async def progress(x, progress_event):
-        print(progress_event.type())
+        if debug_mode:
+            print(progress_event.type())
         if progress_event.type() == iroh.AddProgressType.ALL_DONE:
             all_done_event = progress_event.as_all_done()
             x.hash = all_done_event.hash
-            print(all_done_event.hash)
-            print(all_done_event.format)
+            if debug_mode:
+                print(all_done_event.hash)
+                print(all_done_event.format)
             x.format = all_done_event.format
         if progress_event.type() == iroh.AddProgressType.ABORT:
             abort_event = progress_event.as_abort()
@@ -708,25 +734,31 @@ class DocWatch:
             self.queue.put(True)
         elif t == iroh.LiveEventType.INSERT_REMOTE:
             insert_remove_event = e.as_insert_remote()
-            print(f"LiveEvent - InsertRemote:\n\tentry hash:\n\t{insert_remove_event.entry.content_hash()}\n\tcontent_status: {insert_remove_event.content_status}")
-            print("Insert Remove events will be eventually followed by the ContentReady event")
+            if debug_mode:
+                print(f"LiveEvent - InsertRemote:\n\tentry hash:\n\t{insert_remove_event.entry.content_hash()}\n\tcontent_status: {insert_remove_event.content_status}")
+                print("Insert Remove events will be eventually followed by the ContentReady event")
         elif t == iroh.LiveEventType.CONTENT_READY:
             hash_val = e.as_content_ready()
-            print(f"LiveEvent - ContentReady: hash {hash_val}")
+            if debug_mode:
+                print(f"LiveEvent - ContentReady: hash {hash_val}")
         elif t == iroh.LiveEventType.NEIGHBOR_UP:
             node_id = e.as_neighbor_up()
-            print(f"LiveEvent - NeighborUp: node id {node_id}")
+            if debug_mode:
+                print(f"LiveEvent - NeighborUp: node id {node_id}")
         elif t == iroh.LiveEventType.NEIGHBOR_DOWN:
             node_id = e.as_neighbor_down()
-            print(f"LiveEvent - NeighborDown: node id {node_id}")
+            if debug_mode:
+                print(f"LiveEvent - NeighborDown: node id {node_id}")
         elif t == iroh.LiveEventType.SYNC_FINISHED:
             sync_event = e.as_sync_finished()
-            print(f"Live Event - SyncFinished: synced peer: {sync_event.peer}")
+            if debug_mode:
+                print(f"Live Event - SyncFinished: synced peer: {sync_event.peer}")
         elif t == iroh.LiveEventType.PENDING_CONTENT_READY:
-            node_id = e.as_content_ready()
-            print(f"Live Event - PendingContentReady: {node_id}")
+            if debug_mode:
+                print(f"Live Event - PendingContentReady")
         else:
-            print("Event type was: {}".format(t))
+            if debug_mode:
+                print("Event type was: {}".format(t))
 
 async def main():
     global node
