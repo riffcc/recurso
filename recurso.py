@@ -164,11 +164,6 @@ async def create_children_document(inode_map_doc_id):
     await doc.set_bytes(author, b"version", b"v0")
     await doc.set_bytes(author, b"created", bytes(str(time.time()), "utf-8"))
     await doc.set_bytes(author, b"updated", bytes(str(time.time()), "utf-8"))
-    # await doc.set_bytes(author, b"fsdir-never", b"rheibcmkl4jn63iolncyffoxyhoe327unn5wndwvmvkb5dmnxsjq")
-    # await doc.set_bytes(author, b"fsdir-gonna", b"rheibcmkl4jn63iolncyffoxyhoe327unn5wndwvmvkb5dmnxsjq")
-    # await doc.set_bytes(author, b"fsdir-give", b"rheibcmkl4jn63iolncyffoxyhoe327unn5wndwvmvkb5dmnxsjq")
-    # await doc.set_bytes(author, b"fsdir-you", b"rheibcmkl4jn63iolncyffoxyhoe327unn5wndwvmvkb5dmnxsjq")
-    # await doc.set_bytes(author, b"fsdir-up", b"rheibcmkl4jn63iolncyffoxyhoe327unn5wndwvmvkb5dmnxsjq")
     print("Created children document: {}".format(children_doc_id))
     # Debug mode: print out the doc we just created
     if debug_mode:
