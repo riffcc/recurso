@@ -10,6 +10,7 @@ import decode_ticket
 import json
 import queue
 import base64
+import threading
 from blake3 import blake3
 
 # Utility functions
@@ -348,6 +349,7 @@ async def create_root_document(ticket=False):
     time.sleep(1)
     ticket_doc_id = await create_ticket_document()
     status = await scan_root_document(doc_id)
+    print("Created ticket doc: {}".format(ticket_doc_id))
     print("Scan status: {}".format(status))
     if status == "ok":
         # Found a root document, return it
@@ -601,16 +603,17 @@ async def gossip_loop(ticket, gossip_topic):
             if message["msg"] == "Hello, join me!": 
                 # Notify the user that a node gave us an offer to join
                 print("Node {} joined and asked us to sync from them.".format(message["node_id"]))
-                asyncio.create_task(sync_from_node(node, message["join_ticket"]))
+                await asyncio.to_thread(await sync_from_node(node, message["join_ticket"]))
+                print("Spawned a thread and continued")
         await asyncio.sleep(1)
 
-async def watch_document(node, doc, event_queue, tickets_doc):
+async def watch_document(node, doc, event_queue):
     while True:
         try:
-            print("Watching document")
+            print("Watching document: " + doc.id())
             update = await event_queue.get()
             print("Update: {}".format(update))
-            await process_document_update(node, doc, update, tickets_doc)
+            await process_document_update(node, doc, update)
         except asyncio.CancelledError:
             # Handle cancellation if needed
             break
@@ -619,24 +622,23 @@ async def watch_document(node, doc, event_queue, tickets_doc):
             # Optionally, add a small delay before continuing
             await asyncio.sleep(0.1)
 
-async def process_document_update(node, doc, update, tickets_doc):
+async def process_document_update(node, doc, update):
     if update.type() == iroh.WatchEventType.INSERT:
         content = await update.content_bytes(doc)
         print(update.key())
         print("TRIGGERED")
         if update.key() == b"join_ticket":
             new_ticket = content.decode()
-            new_doc, event_queue = await join_and_watch_document(node, iroh.DocTicket(new_ticket))
-            if event_queue:
-                asyncio.create_task(watch_document(node, new_doc, event_queue, tickets_doc))
+            await join_and_watch_document(node, iroh.DocTicket(new_ticket))
 
 async def sync_from_node(node, read_only_ticket):
-    remote_tickets_doc, event_queue = await join_and_watch_document(node, read_only_ticket)
+    # Read document once, then watch it in a separate thread
     remote_node_id = decode_ticket.decode_iroh_ticket(read_only_ticket).nodes[0].node_id
     print("Syncing {}".format(read_only_ticket) + " from node: {}".format(remote_node_id))
+    remote_tickets_doc = await node.docs().join(iroh.DocTicket(read_only_ticket))
+    print("Opened remote tickets document")
     await asyncio.sleep(1)
     if remote_tickets_doc:
-        # Load everything once
         first_tickets = await get_all_keys_by_prefix(remote_tickets_doc, "inode_")
         # Iterate over children, respecting the start_id
         for i, entry in enumerate(first_tickets):
@@ -658,25 +660,28 @@ async def sync_from_node(node, read_only_ticket):
                     opts = iroh.BlobDownloadOptions(iroh.BlobFormat.RAW, [nodeaddr], iroh.SetTagOption.auto())
                     blob = await node.blobs().download(hash, opts, cb)
             elif b"inode_" in entry.key():
-                # It's a document.
-                # Sync the ticket
+                # It's a document. Let's sync and follow it in a separate thread
                 print("Syncing document ticket")
-                new_doc, event_queue = await join_and_watch_document(node, ticket_data)
-                asyncio.create_task(watch_document(node, new_doc, event_queue, new_doc.id()))
+                result = asyncio.to_thread(join_and_watch_document(node, ticket_data))
+                print(result)
             else:
                 # This should never fire.
                 print("Unknown ticket type")
 
+        # Now we're going to watch the document for any new tickets
+        remote_tickets_doc, event_queue = await join_and_watch_document(node, read_only_ticket)
+        # Now we watch the document for any new tickets
+        print("Watching document for new tickets")
         while True:
             update = await event_queue.get()
             print(update)
             if update.type() == iroh.WatchEventType.INSERT:
-                print("TRIGGERED")
+                print("Found new ticket in document: {}".format(update.cont))
                 content = await update.content_bytes(remote_tickets_doc)
                 new_ticket = content.decode()
-                new_doc, event_queue = await join_and_watch_document(node, new_ticket)
-                if new_doc:
-                    asyncio.create_task(watch_document(node, new_doc, event_queue, new_doc.id()))
+                print("New ticket: {}".format(new_ticket))
+                # We got a new ticket. Let's sync from it
+                await asyncio.to_thread(await sync_from_node(node, new_ticket))
 
 async def join_and_watch_document(node, ticket):
     try:
@@ -686,6 +691,8 @@ async def join_and_watch_document(node, ticket):
         doc = await node.docs().join(ticket)
         callback = DocWatch(event_queue)
         await doc.subscribe(callback)
+        asyncio.create_task(watch_document(node, doc, event_queue))
+        print("Joined and watched document.")
         return doc, event_queue
     except Exception as e:
         print(f"Failed to join document: {e}")
